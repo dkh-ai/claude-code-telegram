@@ -142,7 +142,14 @@ async def taskstop_command(
                 parse_mode="HTML",
             )
             return
-        await task_manager.stop_task(task_id)
+        try:
+            await task_manager.stop_task(task_id)
+        except Exception as e:
+            logger.error("Failed to stop task", task_id=task_id, error=str(e))
+            await update.message.reply_text(
+                f"Ошибка при остановке задачи: {escape_html(str(e)[:200])}"
+            )
+            return
         await update.message.reply_text(
             f"⏹ Задача <code>{escape_html(task_id)}</code> остановлена.",
             parse_mode="HTML",
@@ -176,7 +183,14 @@ async def taskstop_command(
             )
             return
 
-    await task_manager.stop_task(task.task_id)
+    try:
+        await task_manager.stop_task(task.task_id)
+    except Exception as e:
+        logger.error("Failed to stop task", task_id=task.task_id, error=str(e))
+        await update.message.reply_text(
+            f"Ошибка при остановке задачи: {escape_html(str(e)[:200])}"
+        )
+        return
     await update.message.reply_text(
         f"⏹ Задача <code>{task.task_id}</code> остановлена.",
         parse_mode="HTML",

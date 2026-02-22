@@ -348,12 +348,24 @@ class MessageOrchestrator:
             )
         )
 
-        # taskstop: callback for inline keyboard stop buttons
+        # Task callback handlers for inline keyboard buttons
         if features and features.background_tasks_enabled:
             app.add_handler(
                 CallbackQueryHandler(
                     self._inject_deps(self._taskstop_callback),
                     pattern=r"^taskstop:",
+                )
+            )
+            app.add_handler(
+                CallbackQueryHandler(
+                    self._inject_deps(self._tasklog_callback),
+                    pattern=r"^tasklog:",
+                )
+            )
+            app.add_handler(
+                CallbackQueryHandler(
+                    self._inject_deps(self._taskretry_callback),
+                    pattern=r"^taskretry:",
                 )
             )
 
@@ -1259,11 +1271,97 @@ class MessageOrchestrator:
             )
             return
 
-        await task_manager.stop_task(task_id)
+        try:
+            await task_manager.stop_task(task_id)
+        except Exception as e:
+            logger.error("Failed to stop task", task_id=task_id, error=str(e))
+            await query.edit_message_text(
+                f"Ошибка при остановке задачи: {escape_html(str(e)[:200])}",
+                parse_mode="HTML",
+            )
+            return
         await query.edit_message_text(
-            f"⏹ Задача <code>{task_id}</code> остановлена.",
+            f"⏹ Задача <code>{escape_html(task_id)}</code> остановлена.",
             parse_mode="HTML",
         )
+
+    async def _tasklog_callback(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
+        """Handle tasklog: callbacks — show last output of a task."""
+        query = update.callback_query
+        await query.answer()
+
+        data = query.data
+        _, task_id = data.split(":", 1)
+
+        task_manager = context.bot_data.get("task_manager")
+        if not task_manager:
+            await query.edit_message_text("Фоновые задачи не настроены.")
+            return
+
+        task = await task_manager.get_task(task_id)
+        if not task:
+            await query.edit_message_text(
+                f"Задача <code>{escape_html(task_id)}</code> не найдена.",
+                parse_mode="HTML",
+            )
+            return
+
+        output = task.last_output or "(нет вывода)"
+        safe_output = escape_html(output[:3000])
+        await query.edit_message_text(
+            f"📋 Задача <code>{task_id}</code>:\n\n"
+            f"<pre>{safe_output}</pre>",
+            parse_mode="HTML",
+        )
+
+    async def _taskretry_callback(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
+        """Handle taskretry: callbacks — restart a failed/timed-out task."""
+        query = update.callback_query
+        await query.answer()
+
+        data = query.data
+        _, task_id = data.split(":", 1)
+
+        task_manager = context.bot_data.get("task_manager")
+        if not task_manager:
+            await query.edit_message_text("Фоновые задачи не настроены.")
+            return
+
+        task = await task_manager.get_task(task_id)
+        if not task:
+            await query.edit_message_text(
+                f"Задача <code>{escape_html(task_id)}</code> не найдена.",
+                parse_mode="HTML",
+            )
+            return
+
+        # If task is still running, stop it first
+        if task.status == "running":
+            try:
+                await task_manager.stop_task(task_id)
+            except Exception:
+                pass
+
+        try:
+            new_task_id = await task_manager.start_task(
+                prompt=task.prompt,
+                project_path=task.project_path,
+                user_id=task.user_id,
+                chat_id=task.chat_id or query.message.chat_id,
+                message_thread_id=task.message_thread_id,
+                session_id=task.session_id,
+            )
+            await query.edit_message_text(
+                f"🔄 Задача перезапущена\n"
+                f"Новый ID: <code>{new_task_id}</code>",
+                parse_mode="HTML",
+            )
+        except ValueError as e:
+            await query.edit_message_text(f"❌ {escape_html(str(e))}")
 
     async def _agentic_callback(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
