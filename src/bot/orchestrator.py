@@ -295,6 +295,25 @@ class MessageOrchestrator:
         if self.settings.enable_project_threads:
             handlers.append(("sync_threads", command.sync_threads))
 
+        # Background task commands (conditional on feature flag)
+        features = self.deps.get("features")
+        if features and features.background_tasks_enabled:
+            from .handlers.task_handlers import (
+                task_command,
+                taskcontinue_command,
+                tasklog_command,
+                taskstatus_command,
+                taskstop_command,
+            )
+
+            handlers.extend([
+                ("task", task_command),
+                ("taskstatus", taskstatus_command),
+                ("tasklog", tasklog_command),
+                ("taskstop", taskstop_command),
+                ("taskcontinue", taskcontinue_command),
+            ])
+
         for cmd, handler in handlers:
             app.add_handler(CommandHandler(cmd, self._inject_deps(handler)))
 
@@ -328,6 +347,15 @@ class MessageOrchestrator:
                 pattern=r"^cd:",
             )
         )
+
+        # taskstop: callback for inline keyboard stop buttons
+        if features and features.background_tasks_enabled:
+            app.add_handler(
+                CallbackQueryHandler(
+                    self._inject_deps(self._taskstop_callback),
+                    pattern=r"^taskstop:",
+                )
+            )
 
         logger.info("Agentic handlers registered")
 
@@ -391,6 +419,15 @@ class MessageOrchestrator:
             ]
             if self.settings.enable_project_threads:
                 commands.append(BotCommand("sync_threads", "Sync project topics"))
+            features = self.deps.get("features")
+            if features and features.background_tasks_enabled:
+                commands.extend([
+                    BotCommand("task", "Run a background task"),
+                    BotCommand("taskstatus", "Show running tasks"),
+                    BotCommand("tasklog", "Show task output"),
+                    BotCommand("taskstop", "Stop a running task"),
+                    BotCommand("taskcontinue", "Continue last task"),
+                ])
             return commands
         else:
             commands = [
@@ -699,6 +736,26 @@ class MessageOrchestrator:
             user_id=user_id,
             message_length=len(message_text),
         )
+
+        # Block interactive mode if project has a running background task
+        task_manager = context.bot_data.get("task_manager")
+        if task_manager:
+            current_dir = context.user_data.get(
+                "current_directory", self.settings.approved_directory
+            )
+            running_task = await task_manager.get_running_task(
+                Path(str(current_dir)) if not isinstance(current_dir, Path) else current_dir
+            )
+            if running_task:
+                await update.message.reply_text(
+                    f"⚠️ В проекте уже выполняется фоновая задача "
+                    f"<code>{running_task.task_id}</code>.\n\n"
+                    f"Используй /taskstatus для просмотра статуса, "
+                    f"/taskstop для остановки, или переключись на другой проект "
+                    f"через /repo.",
+                    parse_mode="HTML",
+                )
+                return
 
         # Rate limit check
         rate_limiter = context.bot_data.get("rate_limiter")
@@ -1176,6 +1233,36 @@ class MessageOrchestrator:
             "<b>Repos</b>\n\n" + "\n".join(lines),
             parse_mode="HTML",
             reply_markup=reply_markup,
+        )
+
+    async def _taskstop_callback(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
+        """Handle taskstop: callbacks from inline keyboard buttons."""
+        query = update.callback_query
+        await query.answer()
+
+        data = query.data
+        _, task_id = data.split(":", 1)
+
+        task_manager = context.bot_data.get("task_manager")
+        if not task_manager:
+            await query.edit_message_text("Фоновые задачи не настроены.")
+            return
+
+        task = await task_manager.get_task(task_id)
+        if not task or task.status != "running":
+            await query.edit_message_text(
+                f"Задача <code>{escape_html(task_id)}</code> не найдена "
+                f"или уже завершена.",
+                parse_mode="HTML",
+            )
+            return
+
+        await task_manager.stop_task(task_id)
+        await query.edit_message_text(
+            f"⏹ Задача <code>{task_id}</code> остановлена.",
+            parse_mode="HTML",
         )
 
     async def _agentic_callback(
