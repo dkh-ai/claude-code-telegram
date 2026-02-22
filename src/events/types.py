@@ -52,3 +52,73 @@ class AgentResponseEvent(Event):
     reply_to_message_id: Optional[int] = None
     source: str = "agent"
     originating_event_id: Optional[str] = None
+
+
+# === Background Task Events ===
+
+
+@dataclass
+class TaskStartedEvent(Event):
+    """Emitted when a background task is launched."""
+
+    task_id: str = ""
+    project_path: Path = field(default_factory=lambda: Path("."))
+    prompt: str = ""
+    user_id: int = 0
+    chat_id: int = 0
+    message_thread_id: Optional[int] = None
+    source: str = "task_manager"
+
+
+@dataclass
+class TaskProgressEvent(Event):
+    """Emitted periodically during background task execution (heartbeat)."""
+
+    task_id: str = ""
+    elapsed_seconds: int = 0
+    cost: float = 0.0
+    stage: str = ""
+    chat_id: int = 0
+    message_thread_id: Optional[int] = None
+    source: str = "task_manager"
+
+
+@dataclass
+class TaskCompletedEvent(Event):
+    """Emitted when a background task finishes successfully."""
+
+    task_id: str = ""
+    duration_seconds: int = 0
+    cost: float = 0.0
+    commits: List[Dict[str, str]] = field(default_factory=list)
+    result_summary: str = ""
+    chat_id: int = 0
+    message_thread_id: Optional[int] = None
+    source: str = "task_manager"
+
+
+@dataclass
+class TaskFailedEvent(Event):
+    """Emitted when a background task fails."""
+
+    task_id: str = ""
+    duration_seconds: int = 0
+    cost: float = 0.0
+    error_message: str = ""
+    last_output: str = ""
+    chat_id: int = 0
+    message_thread_id: Optional[int] = None
+    source: str = "task_manager"
+
+
+@dataclass
+class TaskTimeoutEvent(Event):
+    """Emitted when a background task appears hung."""
+
+    task_id: str = ""
+    duration_seconds: int = 0
+    cost: float = 0.0
+    idle_seconds: int = 0
+    chat_id: int = 0
+    message_thread_id: Optional[int] = None
+    source: str = "task_manager"

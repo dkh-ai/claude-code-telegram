@@ -71,6 +71,11 @@ class FeatureFlags:
         """Check if agentic conversational mode is enabled."""
         return self.settings.agentic_mode
 
+    @property
+    def background_tasks_enabled(self) -> bool:
+        """Check if background task execution is enabled."""
+        return self.settings.enable_background_tasks
+
     def is_feature_enabled(self, feature_name: str) -> bool:
         """Generic feature check by name."""
         feature_map = {
@@ -85,6 +90,7 @@ class FeatureFlags:
             "api_server": self.api_server_enabled,
             "scheduler": self.scheduler_enabled,
             "agentic_mode": self.agentic_mode_enabled,
+            "background_tasks": self.background_tasks_enabled,
         }
         return feature_map.get(feature_name, False)
 
@@ -111,4 +117,6 @@ class FeatureFlags:
             features.append("api_server")
         if self.scheduler_enabled:
             features.append("scheduler")
+        if self.background_tasks_enabled:
+            features.append("background_tasks")
         return features

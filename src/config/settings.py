@@ -228,6 +228,37 @@ class Settings(BaseSettings):
         ge=0.0,
     )
 
+    # Background tasks
+    enable_background_tasks: bool = Field(
+        True, description="Enable /task commands for background execution"
+    )
+    heartbeat_interval_seconds: int = Field(
+        60, description="Interval between heartbeat notifications (seconds)"
+    )
+    task_timeout_seconds: int = Field(
+        300, description="Idle timeout before task is considered hung (seconds)"
+    )
+    task_max_duration_seconds: int = Field(
+        3600, description="Maximum task duration (default 1 hour)"
+    )
+    task_max_cost: float = Field(
+        10.0, description="Maximum cost per single background task in USD"
+    )
+    max_concurrent_tasks: int = Field(
+        3, description="Maximum concurrent background tasks across all projects"
+    )
+
+    # LLM Provider
+    llm_provider: str = Field(
+        "claude_sdk", description="LLM provider: claude_sdk or gateway"
+    )
+    llm_gateway_url: Optional[str] = Field(
+        None, description="LLM Gateway URL (future)"
+    )
+    llm_gateway_token: Optional[str] = Field(
+        None, description="LLM Gateway auth token (future)"
+    )
+
     model_config = SettingsConfigDict(
         env_file=".env", env_file_encoding="utf-8", case_sensitive=False, extra="ignore"
     )
