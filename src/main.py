@@ -39,6 +39,13 @@ from src.security.validators import SecurityValidator
 from src.storage.facade import Storage
 from src.storage.session_storage import SQLiteSessionStorage
 
+# Background tasks (lazy imports moved here for wiring in create_application)
+from src.llm.factory import create_llm_provider
+from src.notifications.task_notifications import TaskNotificationHandler
+from src.tasks.heartbeat import HeartbeatService
+from src.tasks.manager import TaskManager
+from src.tasks.repository import TaskRepository
+
 
 def setup_logging(debug: bool = False) -> None:
     """Configure structured logging."""
@@ -175,6 +182,30 @@ async def create_application(config: Settings) -> Dict[str, Any]:
     )
     agent_handler.register()
 
+    # Background task infrastructure
+    task_manager = None
+    if features.background_tasks_enabled:
+        llm_provider = create_llm_provider(
+            config, claude_integration=claude_integration
+        )
+        task_repo = TaskRepository(storage.db_manager)
+        heartbeat_service = HeartbeatService(
+            repo=task_repo,
+            event_bus=event_bus,
+            interval=config.heartbeat_interval_seconds,
+            timeout=config.task_timeout_seconds,
+        )
+        task_manager = TaskManager(
+            provider=llm_provider,
+            repo=task_repo,
+            event_bus=event_bus,
+            heartbeat=heartbeat_service,
+            settings=config,
+        )
+        # Recover orphaned tasks from previous run
+        await task_manager.recover()
+        logger.info("Background task infrastructure created")
+
     # Create bot with all dependencies
     dependencies = {
         "auth_manager": auth_manager,
@@ -186,6 +217,7 @@ async def create_application(config: Settings) -> Dict[str, Any]:
         "event_bus": event_bus,
         "project_registry": None,
         "project_threads_manager": None,
+        "task_manager": task_manager,
     }
 
     bot = ClaudeCodeBot(config, dependencies)
@@ -293,6 +325,16 @@ async def run_application(app: Dict[str, Any]) -> None:
         )
         notification_service.register()
         await notification_service.start()
+
+        # Task notification handler (if background tasks enabled)
+        task_notification_handler = None
+        if features.background_tasks_enabled:
+            task_notification_handler = TaskNotificationHandler(
+                event_bus=event_bus,
+                bot=telegram_bot,
+            )
+            task_notification_handler.register()
+            logger.info("Task notification handler registered")
 
         # Collect concurrent tasks
         tasks = []
