@@ -144,7 +144,7 @@ class TaskManager:
 
         # Launch the asyncio task and start heartbeat
         asyncio_task = asyncio.create_task(
-            self._run_task(task), name=f"bg-task-{task_id}"
+            self._run_task_with_cleanup(task), name=f"bg-task-{task_id}"
         )
         self._running_tasks[task_id] = asyncio_task
 
@@ -395,6 +395,20 @@ class TaskManager:
                 task_id=task_id,
                 error=error_msg,
             )
+
+    async def _run_task_with_cleanup(self, task: BackgroundTask) -> None:
+        """Wrapper ensuring heartbeat stop and running-tasks cleanup."""
+        try:
+            await self._run_task(task)
+        except asyncio.CancelledError:
+            pass  # Already logged in _run_task
+        except Exception:
+            logger.exception(
+                "Unexpected error in background task", task_id=task.task_id
+            )
+        finally:
+            await self._heartbeat.stop(task.task_id)
+            self._running_tasks.pop(task.task_id, None)
 
     async def _collect_commits(
         self, project_path: Path, since: datetime
