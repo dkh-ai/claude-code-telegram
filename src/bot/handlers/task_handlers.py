@@ -144,7 +144,7 @@ async def taskstop_command(
             return
         await task_manager.stop_task(task_id)
         await update.message.reply_text(
-            f"⏹ Задача <code>{task_id}</code> остановлена.",
+            f"⏹ Задача <code>{escape_html(task_id)}</code> остановлена.",
             parse_mode="HTML",
         )
         return

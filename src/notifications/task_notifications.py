@@ -8,6 +8,7 @@ import structlog
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.error import TelegramError
 
+from ..bot.utils.html_format import escape_html
 from ..events.bus import Event, EventBus
 from ..events.types import (
     TaskCompletedEvent,
@@ -42,7 +43,7 @@ class TaskNotificationHandler:
             f"🔄 <code>{event.task_id}</code> | "
             f"⏱ {minutes}m {seconds}s | "
             f"💰 ${event.cost:.2f}\n"
-            f"📍 {event.stage}"
+            f"📍 {escape_html(event.stage)}"
         )
         await self._send(event.chat_id, text, event.message_thread_id)
 
@@ -61,9 +62,9 @@ class TaskNotificationHandler:
             for c in event.commits[:5]:
                 sha = c.get("sha", c.get("hash", "?"))
                 msg = c.get("message", "")
-                lines.append(f"   • <code>{sha}</code> {msg}")
+                lines.append(f"   • <code>{sha}</code> {escape_html(msg)}")
         if event.result_summary:
-            lines.append(f"\n📋 {event.result_summary[:300]}")
+            lines.append(f"\n📋 {escape_html(event.result_summary[:300])}")
         await self._send(event.chat_id, "\n".join(lines), event.message_thread_id)
 
     async def handle_failed(self, event: Event) -> None:
@@ -75,7 +76,7 @@ class TaskNotificationHandler:
             f"❌ <b>Задача <code>{event.task_id}</code> завершилась с ошибкой</b>\n\n"
             f"⏱ Время: {minutes}m {seconds}s\n"
             f"💰 Стоимость: ${event.cost:.2f}\n"
-            f"📋 Ошибка: {event.error_message[:200]}"
+            f"📋 Ошибка: {escape_html(event.error_message[:200])}"
         )
         keyboard = InlineKeyboardMarkup([
             [
