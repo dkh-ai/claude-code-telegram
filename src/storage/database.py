@@ -310,6 +310,40 @@ class DatabaseManager:
                     ON project_threads(project_slug);
                 """,
             ),
+            (
+                5,
+                """
+                -- Background tasks for autonomous execution
+                CREATE TABLE IF NOT EXISTS background_tasks (
+                    task_id TEXT PRIMARY KEY,
+                    user_id INTEGER NOT NULL,
+                    project_path TEXT NOT NULL,
+                    prompt TEXT NOT NULL,
+                    status TEXT DEFAULT 'running',
+                    session_id TEXT,
+                    provider TEXT DEFAULT 'anthropic',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    finished_at TIMESTAMP,
+                    total_cost REAL DEFAULT 0.0,
+                    total_turns INTEGER DEFAULT 0,
+                    last_output TEXT,
+                    last_activity_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    result_summary TEXT,
+                    error_message TEXT,
+                    commits_json TEXT DEFAULT '[]',
+                    chat_id INTEGER,
+                    message_thread_id INTEGER,
+                    FOREIGN KEY(user_id) REFERENCES users(user_id)
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_bg_tasks_user
+                    ON background_tasks(user_id);
+                CREATE INDEX IF NOT EXISTS idx_bg_tasks_status
+                    ON background_tasks(status);
+                CREATE INDEX IF NOT EXISTS idx_bg_tasks_project
+                    ON background_tasks(project_path);
+                """,
+            ),
         ]
 
     async def _init_pool(self):
