@@ -268,13 +268,15 @@ class TaskManager:
                             task_id, accumulated_cost, cost_limit
                         )
 
-                # Execute the LLM call
+                # Execute the LLM call (background tasks use configured model)
+                bg_model = getattr(self._settings, "model_background", None)
                 response = await self._provider.execute(
                     prompt=task.prompt,
                     working_dir=task.project_path,
                     user_id=task.user_id,
                     session_id=task.session_id,
                     stream_callback=stream_callback,
+                    model=bg_model,
                 )
 
                 if response.is_error:

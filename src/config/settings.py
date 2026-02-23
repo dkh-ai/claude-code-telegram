@@ -74,7 +74,43 @@ class Settings(BaseSettings):
         description="Anthropic API key for SDK (optional if CLI logged in)",
     )
     claude_model: str = Field(
-        "claude-3-5-sonnet-20241022", description="Claude model to use"
+        "claude-sonnet-4-5-20250514", description="Claude model (legacy, use model_* below)"
+    )
+
+    # --- Model Routing ---
+    model_agent_default: str = Field(
+        "claude-sonnet-4-5-20250514", description="Default agent model (tools)"
+    )
+    model_agent_heavy: str = Field(
+        "claude-opus-4-6", description="Heavy agent model for escalation"
+    )
+    model_chat_default: str = Field(
+        "deepseek-chat", description="Default chat model (text-only)"
+    )
+    model_chat_fallback: str = Field(
+        "gpt-4o-mini", description="Chat fallback model"
+    )
+    model_background: str = Field(
+        "claude-sonnet-4-5-20250514", description="Model for background tasks"
+    )
+    model_router_llm: str = Field(
+        "deepseek-chat", description="Cheap model for intent classification"
+    )
+
+    # Vendor API keys
+    openai_api_key: Optional[SecretStr] = Field(
+        None, description="OpenAI API key"
+    )
+    deepseek_api_key: Optional[SecretStr] = Field(
+        None, description="DeepSeek API key"
+    )
+
+    # Routing config
+    auto_route_enabled: bool = Field(
+        True, description="Enable automatic intent-based routing"
+    )
+    model_override_allowed: bool = Field(
+        True, description="Allow users to override model via /model"
     )
     claude_max_turns: int = Field(
         DEFAULT_CLAUDE_MAX_TURNS, description="Max conversation turns"
@@ -448,5 +484,23 @@ class Settings(BaseSettings):
         return (
             self.anthropic_api_key.get_secret_value()
             if self.anthropic_api_key
+            else None
+        )
+
+    @property
+    def openai_api_key_str(self) -> Optional[str]:
+        """Get OpenAI API key as string."""
+        return (
+            self.openai_api_key.get_secret_value()
+            if self.openai_api_key
+            else None
+        )
+
+    @property
+    def deepseek_api_key_str(self) -> Optional[str]:
+        """Get DeepSeek API key as string."""
+        return (
+            self.deepseek_api_key.get_secret_value()
+            if self.deepseek_api_key
             else None
         )

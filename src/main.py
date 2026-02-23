@@ -46,6 +46,15 @@ from src.tasks.heartbeat import HeartbeatService
 from src.tasks.manager import TaskManager
 from src.tasks.repository import TaskRepository
 
+# Model routing, assistant, memory
+from src.assistant.dispatcher import AssistantDispatcher
+from src.assistant.plugins.reminder import ReminderPlugin
+from src.assistant.registry import PluginRegistry
+from src.llm.chat_pool import ChatProviderPool
+from src.llm.router import IntentRouter
+from src.memory.extractor import FactExtractor
+from src.memory.manager import MemoryManager
+
 
 def setup_logging(debug: bool = False) -> None:
     """Configure structured logging."""
@@ -206,6 +215,31 @@ async def create_application(config: Settings) -> Dict[str, Any]:
         await task_manager.recover()
         logger.info("Background task infrastructure created")
 
+    # --- Model routing, assistant plugins, memory ---
+    chat_pool = ChatProviderPool(config)
+    available = chat_pool.available_vendors()
+    logger.info("Chat provider pool created", vendors=available)
+
+    # Intent router
+    model_router = IntentRouter(settings=config, chat_pool=chat_pool)
+
+    # Plugin system
+    plugin_registry = PluginRegistry()
+    plugin_registry.register(
+        ReminderPlugin(storage=storage, scheduler=None)
+    )
+    assistant_dispatcher = AssistantDispatcher(
+        registry=plugin_registry, chat_pool=chat_pool
+    )
+
+    # Memory system
+    router_provider = chat_pool.get_router_provider()
+    fact_extractor = FactExtractor(chat_provider=router_provider)
+    memory_manager = MemoryManager(
+        db_manager=storage.db_manager, extractor=fact_extractor
+    )
+    logger.info("Memory system initialized")
+
     # Create bot with all dependencies
     dependencies = {
         "auth_manager": auth_manager,
@@ -218,6 +252,10 @@ async def create_application(config: Settings) -> Dict[str, Any]:
         "project_registry": None,
         "project_threads_manager": None,
         "task_manager": task_manager,
+        "model_router": model_router,
+        "chat_provider_pool": chat_pool,
+        "assistant_dispatcher": assistant_dispatcher,
+        "memory_manager": memory_manager,
     }
 
     bot = ClaudeCodeBot(config, dependencies)

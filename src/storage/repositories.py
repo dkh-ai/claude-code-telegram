@@ -616,22 +616,47 @@ class CostTrackingRepository:
         """Initialize repository."""
         self.db = db_manager
 
-    async def update_daily_cost(self, user_id: int, cost: float, date: str = None):
-        """Update daily cost for user."""
+    async def update_daily_cost(
+        self,
+        user_id: int,
+        cost: float,
+        date: str = None,
+        model: Optional[str] = None,
+        mode: Optional[str] = None,
+    ) -> None:
+        """Update daily cost for user with optional model/mode tracking."""
         if not date:
             date = datetime.now(UTC).strftime("%Y-%m-%d")
 
         async with self.db.get_connection() as conn:
             await conn.execute(
                 """
-                INSERT INTO cost_tracking (user_id, date, daily_cost, request_count)
-                VALUES (?, ?, ?, 1)
+                INSERT INTO cost_tracking
+                    (user_id, date, daily_cost, request_count, model, mode)
+                VALUES (?, ?, ?, 1, ?, ?)
                 ON CONFLICT(user_id, date)
                 DO UPDATE SET
                     daily_cost = daily_cost + ?,
-                    request_count = request_count + 1
+                    request_count = request_count + 1,
+                    model = COALESCE(excluded.model, model),
+                    mode = COALESCE(excluded.mode, mode)
             """,
-                (user_id, date, cost, cost),
+                (user_id, date, cost, model, mode, cost),
+            )
+            await conn.commit()
+
+    async def record_feedback(
+        self, user_id: int, feedback: str, date: Optional[str] = None
+    ) -> None:
+        """Record user feedback (good/bad) for the most recent interaction."""
+        if not date:
+            date = datetime.now(UTC).strftime("%Y-%m-%d")
+
+        async with self.db.get_connection() as conn:
+            await conn.execute(
+                """UPDATE cost_tracking SET feedback = ?
+                WHERE user_id = ? AND date = ?""",
+                (feedback, user_id, date),
             )
             await conn.commit()
 
@@ -670,6 +695,57 @@ class CostTrackingRepository:
             )
             rows = await cursor.fetchall()
             return [dict(row) for row in rows]
+
+
+class IntentLogRepository:
+    """Intent classification log data access."""
+
+    def __init__(self, db_manager: DatabaseManager):
+        """Initialize repository."""
+        self.db = db_manager
+
+    async def log_intent(
+        self,
+        message_hash: str,
+        detected_mode: str,
+        confidence: float,
+        method: str,
+    ) -> None:
+        """Log an intent classification."""
+        async with self.db.get_connection() as conn:
+            await conn.execute(
+                """INSERT INTO intent_log
+                (message_hash, detected_mode, confidence, method)
+                VALUES (?, ?, ?, ?)""",
+                (message_hash, detected_mode, confidence, method),
+            )
+            await conn.commit()
+
+    async def mark_correct(self, message_hash: str, was_correct: bool) -> None:
+        """Mark a classification as correct/incorrect (via feedback)."""
+        async with self.db.get_connection() as conn:
+            await conn.execute(
+                """UPDATE intent_log SET was_correct = ?
+                WHERE message_hash = ? AND was_correct IS NULL
+                ORDER BY created_at DESC LIMIT 1""",
+                (was_correct, message_hash),
+            )
+            await conn.commit()
+
+    async def get_accuracy_stats(self) -> Dict:
+        """Get classification accuracy stats by method."""
+        async with self.db.get_connection() as conn:
+            cursor = await conn.execute(
+                """SELECT method,
+                    COUNT(*) as total,
+                    SUM(CASE WHEN was_correct = 1 THEN 1 ELSE 0 END) as correct,
+                    ROUND(AVG(confidence), 2) as avg_confidence
+                FROM intent_log
+                WHERE was_correct IS NOT NULL
+                GROUP BY method"""
+            )
+            rows = await cursor.fetchall()
+            return {row["method"]: dict(row) for row in rows}
 
 
 class AnalyticsRepository:

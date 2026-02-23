@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Telegram bot providing remote access to Claude Code. Python 3.11+, built with Poetry, using `python-telegram-bot` for Telegram and `claude-agent-sdk` for Claude Code integration. Supports two modes: agentic (default, conversational) and classic (13-command terminal-like interface). Includes background task execution, webhook API server, job scheduler, and multi-project topic routing.
+Telegram bot providing remote access to Claude Code. Python 3.11+, built with Poetry, using `python-telegram-bot` for Telegram and `claude-agent-sdk` for Claude Code integration. Supports three execution modes: agent (Claude Code with tools), chat (DeepSeek/GPT text-only), and assistant (plugin-based). Includes multi-vendor model routing, persistent user memory, background task execution, webhook API server, job scheduler, and multi-project topic routing.
 
 ## Commands
 
@@ -145,12 +145,59 @@ context.bot_data["task_manager"]       # if background_tasks_enabled
 - `src/api/` -- FastAPI webhook server, GitHub HMAC-SHA256 + Bearer token auth
 - `src/scheduler/` -- APScheduler cron jobs, persistent storage in SQLite
 - `src/notifications/` -- NotificationService (rate-limited delivery), TaskNotificationHandler (task lifecycle events)
+- `src/assistant/` -- Plugin system: base protocol, registry, dispatcher, built-in plugins (reminder)
+- `src/memory/` -- Persistent memory: MemoryManager, FactExtractor, user facts & conversation summaries
 
 ### LLM Provider Abstraction
 
 `LLMProvider` protocol (`src/llm/interface.py`) defines a provider-agnostic interface with `execute()` and `healthcheck()` methods. `ClaudeProvider` (`src/llm/claude_provider.py`) adapts `ClaudeIntegration` to this protocol. Factory function `create_llm_provider()` selects provider based on `LLM_PROVIDER` setting (currently `claude_sdk`, future: `gateway`).
 
 `LLMResponse` dataclass unifies responses: `content`, `session_id`, `cost`, `duration_ms`, `num_turns`, `is_error`.
+
+### Multi-Vendor Model Routing
+
+Three execution modes with hybrid intent routing:
+
+| Mode | When | Models | Tools |
+|------|------|--------|-------|
+| **Agent** | Code, files, bash, git | Claude Haiku/Sonnet/Opus | Full Claude Code |
+| **Assistant** | Reminders, KB, plugins | Any (plugin decides) | Plugin-specific |
+| **Chat** | General conversation | DeepSeek/GPT/Haiku | None |
+
+**Routing flow:** User message → ChatAwareness → MemoryManager.recall → IntentRouter (regex ~80%, LLM fallback ~20%) → Mode execution.
+
+**Escalation chains:** Agent: Sonnet → Opus. Chat: DeepSeek → GPT → Haiku → Sonnet. Auto-escalation on short/failing responses, manual via 🔄 button.
+
+Key files:
+- `src/llm/chat_provider.py` — OpenAI-compatible provider (DeepSeek, GPT)
+- `src/llm/chat_pool.py` — Provider pool by vendor prefix
+- `src/llm/router.py` — Hybrid regex+LLM intent router with escalation
+
+Settings: `MODEL_AGENT_DEFAULT`, `MODEL_AGENT_HEAVY`, `MODEL_CHAT_DEFAULT`, `MODEL_CHAT_FALLBACK`, `MODEL_BACKGROUND`, `MODEL_ROUTER_LLM`, `AUTO_ROUTE_ENABLED`, `OPENAI_API_KEY`, `DEEPSEEK_API_KEY`.
+
+### Assistant Plugin System
+
+Extensible plugin architecture (`src/assistant/`):
+- `base.py` — `AssistantPlugin` protocol: `name`, `description`, `patterns`, `model`, `can_handle()`, `handle()`
+- `registry.py` — Plugin registry with pattern-based discovery
+- `dispatcher.py` — Routes to matching plugin, falls back to chat mode
+- `plugins/reminder.py` — Example: LLM-extracted reminders with DB storage
+
+### Memory System
+
+Three-layer persistent memory (`src/memory/`):
+1. **Working Memory** — Last 20 messages in `context.user_data["chat_history"]` (ephemeral)
+2. **User Profile** — Persistent facts in `user_memory` table (preferences, personal info, work context)
+3. **Conversation Summaries** — Compressed session history in `conversation_summaries` table
+
+Memory flow: recall → inject into prompt → after response → extract new facts (async, cheap LLM).
+Memory is per-user, shared across all chats.
+
+### Multi-Chat Awareness
+
+`ChatAwareness` (`src/bot/chat_awareness.py`) determines response behavior:
+- **Private DM**: Always respond
+- **Group**: Respond only when @mentioned or replied-to; silently observe otherwise (memory extraction)
 
 ### Background Task System
 
@@ -188,6 +235,8 @@ Agentic platform settings: `AGENTIC_MODE` (default true), `ENABLE_API_SERVER`, `
 
 Background task settings: `ENABLE_BACKGROUND_TASKS` (default true), `HEARTBEAT_INTERVAL_SECONDS` (60), `TASK_TIMEOUT_SECONDS` (300), `TASK_MAX_DURATION_SECONDS` (3600), `TASK_MAX_COST` (10.0 USD), `MAX_CONCURRENT_TASKS` (3), `LLM_PROVIDER` (`claude_sdk`).
 
+Model routing: `MODEL_AGENT_DEFAULT` (claude-sonnet-4-5), `MODEL_AGENT_HEAVY` (claude-opus-4-6), `MODEL_CHAT_DEFAULT` (deepseek-chat), `MODEL_CHAT_FALLBACK` (gpt-4o-mini), `MODEL_BACKGROUND` (claude-sonnet-4-5), `MODEL_ROUTER_LLM` (deepseek-chat), `AUTO_ROUTE_ENABLED` (default true), `MODEL_OVERRIDE_ALLOWED` (default true), `OPENAI_API_KEY`, `DEEPSEEK_API_KEY`.
+
 Security relaxation (trusted environments only): `DISABLE_SECURITY_PATTERNS` (default false), `DISABLE_TOOL_VALIDATION` (default false).
 
 Multi-project topics: `ENABLE_PROJECT_THREADS` (default false), `PROJECT_THREADS_MODE` (`private`|`group`), `PROJECT_THREADS_CHAT_ID` (required for group mode), `PROJECTS_CONFIG_PATH` (path to YAML project registry), `PROJECT_THREADS_SYNC_ACTION_INTERVAL_SECONDS` (default `1.1`, set `0` to disable pacing). See `config/projects.example.yaml`.
@@ -205,6 +254,7 @@ Feature flags in `src/config/features.py` control: MCP, git integration, file up
 | 3 | Agentic Platform | scheduled_jobs, webhook_events, WAL mode |
 | 4 | Project Threads | project_threads table for forum topic routing |
 | 5 | Background Tasks | background_tasks table with status/cost/output tracking |
+| 6 | Model Routing & Memory | intent_log, user_memory, conversation_summaries, reminders; cost_tracking extensions (model, mode, feedback) |
 
 ### Event Types
 

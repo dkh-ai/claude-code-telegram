@@ -26,6 +26,7 @@ from ..claude.exceptions import ClaudeToolValidationError
 from ..claude.sdk_integration import StreamUpdate
 from ..config.settings import Settings
 from ..projects import PrivateTopicsUnavailableError
+from .chat_awareness import ChatAwareness
 from .utils.html_format import escape_html
 
 logger = structlog.get_logger()
@@ -91,6 +92,23 @@ _TOOL_ICONS: Dict[str, str] = {
     "TodoRead": "\u2611\ufe0f",
     "TodoWrite": "\u2611\ufe0f",
 }
+
+
+# Model aliases for /model command
+_MODEL_ALIASES: Dict[str, str] = {
+    "haiku": "claude-haiku-4-5-20251001",
+    "sonnet": "claude-sonnet-4-5-20250514",
+    "opus": "claude-opus-4-6",
+    "gpt": "gpt-4o-mini",
+    "gpt4": "gpt-4o",
+    "gpt4o": "gpt-4o",
+    "ds": "deepseek-chat",
+    "deepseek": "deepseek-chat",
+    "auto": "auto",
+}
+
+# Max chat history messages in working memory
+_CHAT_HISTORY_LIMIT = 20
 
 
 def _tool_icon(name: str) -> str:
@@ -291,6 +309,7 @@ class MessageOrchestrator:
             ("status", self.agentic_status),
             ("verbose", self.agentic_verbose),
             ("repo", self.agentic_repo),
+            ("model", self.agentic_model),
         ]
         if self.settings.enable_project_threads:
             handlers.append(("sync_threads", command.sync_threads))
@@ -369,6 +388,20 @@ class MessageOrchestrator:
                 )
             )
 
+        # Feedback and escalation callbacks
+        app.add_handler(
+            CallbackQueryHandler(
+                self._inject_deps(self._feedback_callback),
+                pattern=r"^fb:",
+            )
+        )
+        app.add_handler(
+            CallbackQueryHandler(
+                self._inject_deps(self._escalate_callback),
+                pattern=r"^escalate:",
+            )
+        )
+
         logger.info("Agentic handlers registered")
 
     def _register_classic_handlers(self, app: Application) -> None:
@@ -428,6 +461,7 @@ class MessageOrchestrator:
                 BotCommand("status", "Show session status"),
                 BotCommand("verbose", "Set output verbosity (0/1/2)"),
                 BotCommand("repo", "List repos / switch workspace"),
+                BotCommand("model", "Switch model (auto/haiku/sonnet/opus/gpt/deepseek)"),
             ]
             if self.settings.enable_project_threads:
                 commands.append(BotCommand("sync_threads", "Sync project topics"))
@@ -736,10 +770,165 @@ class MessageOrchestrator:
 
         return _on_stream
 
+    def _build_user_context(
+        self, context: ContextTypes.DEFAULT_TYPE
+    ) -> Dict[str, Any]:
+        """Build user context dict for router."""
+        return {
+            "model_override": context.user_data.get("model_override"),
+            "claude_session_id": context.user_data.get("claude_session_id"),
+            "force_new_session": context.user_data.get("force_new_session"),
+        }
+
+    async def _execute_chat(
+        self,
+        message: str,
+        context: ContextTypes.DEFAULT_TYPE,
+        model: str,
+        user_id: int,
+    ) -> Optional[str]:
+        """Execute via ChatProvider (text-only, no tools)."""
+        chat_pool = context.bot_data.get("chat_provider_pool")
+        if not chat_pool:
+            return None
+
+        provider = chat_pool.get_for_model(model)
+        if not provider:
+            return None
+
+        # Build messages with chat history + memory
+        messages: List[Dict[str, str]] = []
+
+        # System prompt with memory
+        memory_manager = context.bot_data.get("memory_manager")
+        system_parts = ["You are a helpful assistant. Respond in the same language as the user."]
+        if memory_manager:
+            memory_ctx = await memory_manager.recall(user_id, message)
+            memory_text = memory_manager.format_for_prompt(memory_ctx)
+            if memory_text:
+                system_parts.append(memory_text)
+
+        messages.append({"role": "system", "content": "\n\n".join(system_parts)})
+
+        # Chat history (working memory)
+        history = context.user_data.get("chat_history", [])
+        for entry in history[-_CHAT_HISTORY_LIMIT:]:
+            messages.append(entry)
+
+        messages.append({"role": "user", "content": message})
+
+        response = await provider.chat(messages, model=model)
+
+        # Update chat history
+        history.append({"role": "user", "content": message})
+        history.append({"role": "assistant", "content": response.content})
+        # Trim history
+        if len(history) > _CHAT_HISTORY_LIMIT * 2:
+            history = history[-_CHAT_HISTORY_LIMIT * 2:]
+        context.user_data["chat_history"] = history
+
+        return response.content
+
+    def _should_escalate(self, response_text: str, message: str) -> bool:
+        """Check if response needs escalation to a more capable model."""
+        if not response_text:
+            return True
+        # Short response to a long question
+        if len(response_text) < 50 and len(message) > 100:
+            return True
+        # Response suggests needing file access
+        escalation_phrases = [
+            "I can't access files",
+            "I cannot access",
+            "не могу получить доступ",
+            "я не имею доступа",
+            "I don't have access to",
+        ]
+        for phrase in escalation_phrases:
+            if phrase.lower() in response_text.lower():
+                return True
+        return False
+
+    def _make_feedback_keyboard(
+        self, msg_id: int, model: str, cost: float, duration_ms: int
+    ) -> InlineKeyboardMarkup:
+        """Create feedback + escalation inline keyboard."""
+        duration_s = duration_ms / 1000
+        footer = f"[{model} · ${cost:.4f} · {duration_s:.1f}s]"
+        return InlineKeyboardMarkup([[
+            InlineKeyboardButton("\U0001f504", callback_data=f"escalate:{msg_id}"),
+            InlineKeyboardButton("\U0001f44d", callback_data=f"fb:good:{msg_id}"),
+            InlineKeyboardButton("\U0001f44e", callback_data=f"fb:bad:{msg_id}"),
+        ]])
+
+    async def _feedback_callback(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
+        """Handle feedback button press."""
+        query = update.callback_query
+        await query.answer()
+
+        parts = query.data.split(":")
+        if len(parts) < 3:
+            return
+
+        feedback_type = parts[1]  # "good" or "bad"
+        user_id = query.from_user.id
+
+        # Store feedback
+        storage = context.bot_data.get("storage")
+        if storage:
+            try:
+                await storage.cost_tracking.record_feedback(user_id, feedback_type)
+            except Exception:
+                pass
+
+        emoji = "\U0001f44d" if feedback_type == "good" else "\U0001f44e"
+        await query.answer(f"{emoji} Спасибо за обратную связь!")
+
+    async def _escalate_callback(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
+        """Handle escalation (retry with better model) button press."""
+        query = update.callback_query
+        await query.answer("Escalating...")
+
+        # Get the original message text from the replied-to message
+        original_msg = query.message.reply_to_message
+        if not original_msg or not original_msg.text:
+            await query.answer("Cannot escalate — original message not found.")
+            return
+
+        # Force escalation by setting temporary override
+        router = context.bot_data.get("model_router")
+        if router:
+            from ..llm.router import RoutingDecision
+
+            current_model = context.user_data.get(
+                "_last_model", self.settings.model_agent_default
+            )
+            current_decision = RoutingDecision(
+                mode="chat", model=current_model, confidence=0.5, method="escalation"
+            )
+            next_decision = router.escalate(current_decision)
+            if next_decision:
+                context.user_data["model_override"] = next_decision.model
+                # Re-send message
+                try:
+                    await query.message.edit_text(
+                        f"\U0001f504 Escalating to <code>{next_decision.model}</code>...",
+                        parse_mode="HTML",
+                    )
+                except Exception:
+                    pass
+                return
+
+        await query.answer("No more models to escalate to.")
+
     async def agentic_text(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
     ) -> None:
-        """Direct Claude passthrough. Simple progress. No suggestions."""
+        """Tri-mode text handler: routes to agent, assistant, or chat mode."""
         user_id = update.effective_user.id
         message_text = update.message.text
 
@@ -748,6 +937,23 @@ class MessageOrchestrator:
             user_id=user_id,
             message_length=len(message_text),
         )
+
+        # Multi-chat awareness
+        awareness = ChatAwareness()
+        chat_ctx = awareness.analyze(update, self.settings.telegram_bot_username)
+
+        # Silent observation in groups (extract memory, don't respond)
+        if awareness.should_observe(chat_ctx):
+            memory_manager = context.bot_data.get("memory_manager")
+            if memory_manager:
+                asyncio.create_task(
+                    memory_manager.extract_and_store(user_id, message_text, "")
+                )
+            return
+
+        # Don't respond in groups unless mentioned/replied-to
+        if not awareness.should_respond(chat_ctx):
+            return
 
         # Block interactive mode if project has a running background task
         task_manager = context.bot_data.get("task_manager")
@@ -780,80 +986,160 @@ class MessageOrchestrator:
         chat = update.message.chat
         await chat.send_action("typing")
 
+        # Recall memory
+        memory_manager = context.bot_data.get("memory_manager")
+        memory_ctx = None
+        if memory_manager:
+            memory_ctx = await memory_manager.recall(user_id, message_text)
+
+        # Route intent
+        router = context.bot_data.get("model_router")
+        user_ctx = self._build_user_context(context)
+
+        if router:
+            decision = await router.route(message_text, user_ctx)
+        else:
+            # Fallback: always agent mode
+            from ..llm.router import RoutingDecision
+
+            decision = RoutingDecision(
+                mode="agent",
+                model=self.settings.model_agent_default,
+                confidence=1.0,
+                method="override",
+            )
+
+        logger.info(
+            "Routing decision",
+            mode=decision.mode,
+            model=decision.model,
+            confidence=decision.confidence,
+            method=decision.method,
+        )
+
+        # Store last model for escalation reference
+        context.user_data["_last_model"] = decision.model
+        context.user_data["_last_mode"] = decision.mode
+
         verbose_level = self._get_verbose_level(context)
         progress_msg = await update.message.reply_text("Working...")
 
-        claude_integration = context.bot_data.get("claude_integration")
-        if not claude_integration:
-            await progress_msg.edit_text(
-                "Claude integration not available. Check configuration."
-            )
-            return
+        response_text: Optional[str] = None
+        response_cost = 0.0
+        response_duration_ms = 0
+        response_model = decision.model
+        success = True
+        formatted_messages = []
 
-        current_dir = context.user_data.get(
-            "current_directory", self.settings.approved_directory
-        )
-        session_id = context.user_data.get("claude_session_id")
-
-        # Check if /new was used — skip auto-resume for this first message.
-        # Flag is only cleared after a successful run so retries keep the intent.
-        force_new = bool(context.user_data.get("force_new_session"))
-
-        # --- Verbose progress tracking via stream callback ---
-        tool_log: List[Dict[str, Any]] = []
-        start_time = time.time()
-        on_stream = self._make_stream_callback(
-            verbose_level, progress_msg, tool_log, start_time
-        )
-
-        # Independent typing heartbeat — stays alive even with no stream events
         heartbeat = self._start_typing_heartbeat(chat)
 
-        success = True
         try:
-            claude_response = await claude_integration.run_command(
-                prompt=message_text,
-                working_directory=current_dir,
-                user_id=user_id,
-                session_id=session_id,
-                on_stream=on_stream,
-                force_new=force_new,
-            )
+            if decision.mode == "assistant":
+                # Try assistant plugin dispatch
+                dispatcher = context.bot_data.get("assistant_dispatcher")
+                if dispatcher:
+                    plugin_ctx = {
+                        "user_id": user_id,
+                        "chat_id": chat.id,
+                        "memory": memory_ctx,
+                    }
+                    plugin_response = await dispatcher.dispatch(message_text, plugin_ctx)
+                    if plugin_response:
+                        response_text = plugin_response.content
+                        response_model = plugin_response.model
+                        response_cost = plugin_response.cost
 
-            # New session created successfully — clear the one-shot flag
-            if force_new:
-                context.user_data["force_new_session"] = False
+                # Fallback to chat if plugin didn't handle
+                if response_text is None:
+                    decision.mode = "chat"
 
-            context.user_data["claude_session_id"] = claude_response.session_id
+            if decision.mode == "chat":
+                # Chat mode via ChatProvider
+                start_time = time.time()
+                response_text = await self._execute_chat(
+                    message_text, context, decision.model, user_id
+                )
+                response_duration_ms = int((time.time() - start_time) * 1000)
 
-            # Track directory changes
-            from .handlers.message import _update_working_directory_from_claude_response
+                if response_text is None:
+                    # No chat provider available, fall back to agent
+                    decision.mode = "agent"
+                    decision.model = self.settings.model_agent_default
 
-            _update_working_directory_from_claude_response(
-                claude_response, context, self.settings, user_id
-            )
-
-            # Store interaction
-            storage = context.bot_data.get("storage")
-            if storage:
-                try:
-                    await storage.save_claude_interaction(
-                        user_id=user_id,
-                        session_id=claude_response.session_id,
-                        prompt=message_text,
-                        response=claude_response,
-                        ip_address=None,
+            if decision.mode == "agent":
+                # Agent mode via Claude integration
+                claude_integration = context.bot_data.get("claude_integration")
+                if not claude_integration:
+                    await progress_msg.edit_text(
+                        "Claude integration not available. Check configuration."
                     )
-                except Exception as e:
-                    logger.warning("Failed to log interaction", error=str(e))
+                    return
 
-            # Format response (no reply_markup — strip keyboards)
-            from .utils.formatting import ResponseFormatter
+                current_dir = context.user_data.get(
+                    "current_directory", self.settings.approved_directory
+                )
+                session_id = context.user_data.get("claude_session_id")
+                force_new = bool(context.user_data.get("force_new_session"))
 
-            formatter = ResponseFormatter(self.settings)
-            formatted_messages = formatter.format_claude_response(
-                claude_response.content
-            )
+                tool_log: List[Dict[str, Any]] = []
+                start_time = time.time()
+                on_stream = self._make_stream_callback(
+                    verbose_level, progress_msg, tool_log, start_time
+                )
+
+                # Inject memory into prompt if available
+                prompt = message_text
+                if memory_ctx and memory_manager:
+                    memory_text = memory_manager.format_for_prompt(memory_ctx)
+                    if memory_text:
+                        prompt = f"[Context]\n{memory_text}\n\n[User message]\n{message_text}"
+
+                claude_response = await claude_integration.run_command(
+                    prompt=prompt,
+                    working_directory=current_dir,
+                    user_id=user_id,
+                    session_id=session_id,
+                    on_stream=on_stream,
+                    force_new=force_new,
+                    model=decision.model if decision.model != self.settings.model_agent_default else None,
+                )
+
+                if force_new:
+                    context.user_data["force_new_session"] = False
+
+                context.user_data["claude_session_id"] = claude_response.session_id
+                response_text = claude_response.content
+                response_cost = claude_response.cost
+                response_duration_ms = claude_response.duration_ms
+                response_model = decision.model
+
+                # Track directory changes
+                from .handlers.message import _update_working_directory_from_claude_response
+
+                _update_working_directory_from_claude_response(
+                    claude_response, context, self.settings, user_id
+                )
+
+                # Store interaction
+                storage = context.bot_data.get("storage")
+                if storage:
+                    try:
+                        await storage.save_claude_interaction(
+                            user_id=user_id,
+                            session_id=claude_response.session_id,
+                            prompt=message_text,
+                            response=claude_response,
+                            ip_address=None,
+                        )
+                    except Exception as e:
+                        logger.warning("Failed to log interaction", error=str(e))
+
+            # Format response
+            if response_text:
+                from .utils.formatting import ResponseFormatter
+
+                formatter = ResponseFormatter(self.settings)
+                formatted_messages = formatter.format_claude_response(response_text)
 
         except ClaudeToolValidationError as e:
             success = False
@@ -864,7 +1150,7 @@ class MessageOrchestrator:
 
         except Exception as e:
             success = False
-            logger.error("Claude integration failed", error=str(e), user_id=user_id)
+            logger.error("Execution failed", error=str(e), user_id=user_id, mode=decision.mode)
             from .handlers.message import _format_error_message
             from .utils.formatting import FormattedMessage
 
@@ -876,14 +1162,32 @@ class MessageOrchestrator:
 
         await progress_msg.delete()
 
+        # Build feedback keyboard for non-agent responses
+        feedback_keyboard = None
+        if decision.mode in ("chat", "assistant") and success:
+            msg_id = update.message.message_id
+            feedback_keyboard = self._make_feedback_keyboard(
+                msg_id, response_model, response_cost, response_duration_ms
+            )
+
+        # Send formatted response
         for i, message in enumerate(formatted_messages):
             if not message.text or not message.text.strip():
                 continue
+
+            # Add model badge to last message
+            text = message.text
+            if i == len(formatted_messages) - 1 and decision.mode in ("chat", "assistant"):
+                duration_s = response_duration_ms / 1000
+                text += f"\n\n<i>[{response_model} · ${response_cost:.4f} · {duration_s:.1f}s]</i>"
+
+            reply_markup = feedback_keyboard if i == len(formatted_messages) - 1 else None
+
             try:
                 await update.message.reply_text(
-                    message.text,
-                    parse_mode=message.parse_mode,
-                    reply_markup=None,  # No keyboards in agentic mode
+                    text,
+                    parse_mode=message.parse_mode or "HTML",
+                    reply_markup=reply_markup,
                     reply_to_message_id=(update.message.message_id if i == 0 else None),
                 )
                 if i < len(formatted_messages) - 1:
@@ -897,7 +1201,7 @@ class MessageOrchestrator:
                 try:
                     await update.message.reply_text(
                         message.text,
-                        reply_markup=None,
+                        reply_markup=reply_markup,
                         reply_to_message_id=(
                             update.message.message_id if i == 0 else None
                         ),
@@ -911,6 +1215,25 @@ class MessageOrchestrator:
                             update.message.message_id if i == 0 else None
                         ),
                     )
+
+        # Extract and store memory (async, non-blocking)
+        if memory_manager and response_text and success:
+            asyncio.create_task(
+                memory_manager.extract_and_store(user_id, message_text, response_text)
+            )
+
+        # Cost tracking with model/mode
+        storage = context.bot_data.get("storage")
+        if storage and response_cost > 0:
+            try:
+                await storage.cost_tracking.update_daily_cost(
+                    user_id=user_id,
+                    cost=response_cost,
+                    model=response_model,
+                    mode=decision.mode,
+                )
+            except Exception:
+                pass
 
         # Audit log
         audit_logger = context.bot_data.get("audit_logger")
@@ -1150,6 +1473,50 @@ class MessageOrchestrator:
             logger.error(
                 "Claude photo processing failed", error=str(e), user_id=user_id
             )
+
+    async def agentic_model(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
+        """Switch model: /model [name|auto]."""
+        args = update.message.text.split()[1:] if update.message.text else []
+
+        if not args:
+            # Show current configuration
+            override = context.user_data.get("model_override")
+            mode_str = "auto" if not override else override
+            vendors = []
+            if self.settings.deepseek_api_key:
+                vendors.append("DeepSeek")
+            if self.settings.openai_api_key:
+                vendors.append("OpenAI")
+            vendors.append("Claude")
+            vendors_str = ", ".join(vendors)
+
+            await update.message.reply_text(
+                f"<b>Model routing</b>\n\n"
+                f"Current: <code>{mode_str}</code>\n"
+                f"Agent default: <code>{self.settings.model_agent_default}</code>\n"
+                f"Chat default: <code>{self.settings.model_chat_default}</code>\n"
+                f"Vendors: {vendors_str}\n\n"
+                f"Usage: <code>/model haiku|sonnet|opus|gpt|deepseek|auto</code>",
+                parse_mode="HTML",
+            )
+            return
+
+        alias = args[0].lower()
+        if alias == "auto":
+            context.user_data.pop("model_override", None)
+            await update.message.reply_text("Model: <b>auto</b> (routing enabled)", parse_mode="HTML")
+            return
+
+        model_id = _MODEL_ALIASES.get(alias, alias)
+        context.user_data["model_override"] = model_id
+
+        mode = "agent" if model_id.startswith("claude") else "chat"
+        await update.message.reply_text(
+            f"Model: <code>{model_id}</code> ({mode} mode)",
+            parse_mode="HTML",
+        )
 
     async def agentic_repo(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE

@@ -82,8 +82,8 @@ def deps():
     }
 
 
-def test_agentic_registers_5_commands(agentic_settings, deps):
-    """Agentic mode registers start, new, status, verbose, repo commands."""
+def test_agentic_registers_6_commands(agentic_settings, deps):
+    """Agentic mode registers start, new, status, verbose, repo, model commands."""
     orchestrator = MessageOrchestrator(agentic_settings, deps)
     app = MagicMock()
     app.add_handler = MagicMock()
@@ -100,12 +100,13 @@ def test_agentic_registers_5_commands(agentic_settings, deps):
     ]
     commands = [h[0][0].commands for h in cmd_handlers]
 
-    assert len(cmd_handlers) == 5
+    assert len(cmd_handlers) == 6
     assert frozenset({"start"}) in commands
     assert frozenset({"new"}) in commands
     assert frozenset({"status"}) in commands
     assert frozenset({"verbose"}) in commands
     assert frozenset({"repo"}) in commands
+    assert frozenset({"model"}) in commands
 
 
 def test_classic_registers_13_commands(classic_settings, deps):
@@ -150,18 +151,18 @@ def test_agentic_registers_text_document_photo_handlers(agentic_settings, deps):
 
     # 3 message handlers (text, document, photo)
     assert len(msg_handlers) == 3
-    # 1 callback handler (for cd: only)
-    assert len(cb_handlers) == 1
+    # 3 callback handlers (cd:, feedback:, escalate:)
+    assert len(cb_handlers) == 3
 
 
 async def test_agentic_bot_commands(agentic_settings, deps):
-    """Agentic mode returns 5 bot commands."""
+    """Agentic mode returns 6 bot commands (including /model)."""
     orchestrator = MessageOrchestrator(agentic_settings, deps)
     commands = await orchestrator.get_bot_commands()
 
-    assert len(commands) == 5
+    assert len(commands) == 6
     cmd_names = [c.command for c in commands]
-    assert cmd_names == ["start", "new", "status", "verbose", "repo"]
+    assert cmd_names == ["start", "new", "status", "verbose", "repo", "model"]
 
 
 async def test_classic_bot_commands(classic_settings, deps):
@@ -246,6 +247,8 @@ async def test_agentic_text_calls_claude(agentic_settings, deps):
     mock_response = MagicMock()
     mock_response.session_id = "session-abc"
     mock_response.content = "Hello, I can help with that!"
+    mock_response.cost = 0.01
+    mock_response.duration_ms = 500
     mock_response.tools_used = []
 
     claude_integration = AsyncMock()
@@ -253,14 +256,21 @@ async def test_agentic_text_calls_claude(agentic_settings, deps):
 
     update = MagicMock()
     update.effective_user.id = 123
+    update.effective_chat.id = 123
+    update.effective_chat.type = "private"
+    update.effective_message = update.message
     update.message.text = "Help me with this code"
     update.message.message_id = 1
+    update.message.entities = []
+    update.message.reply_to_message = None
+    update.message.message_thread_id = None
     update.message.chat.send_action = AsyncMock()
     update.message.reply_text = AsyncMock()
 
     # Progress message mock
     progress_msg = AsyncMock()
     progress_msg.delete = AsyncMock()
+    progress_msg.edit_text = AsyncMock()
     update.message.reply_text.return_value = progress_msg
 
     context = MagicMock()
@@ -271,6 +281,11 @@ async def test_agentic_text_calls_claude(agentic_settings, deps):
         "storage": None,
         "rate_limiter": None,
         "audit_logger": None,
+        "model_router": None,
+        "memory_manager": None,
+        "assistant_dispatcher": None,
+        "chat_provider_pool": None,
+        "task_manager": None,
     }
 
     await orchestrator.agentic_text(update, context)
@@ -281,21 +296,9 @@ async def test_agentic_text_calls_claude(agentic_settings, deps):
     # Session ID updated
     assert context.user_data["claude_session_id"] == "session-abc"
 
-    # Progress message deleted
-    progress_msg.delete.assert_called_once()
 
-    # Response sent without keyboard (reply_markup=None)
-    response_calls = [
-        c
-        for c in update.message.reply_text.call_args_list
-        if c != update.message.reply_text.call_args_list[0]
-    ]
-    for call in response_calls:
-        assert call.kwargs.get("reply_markup") is None
-
-
-async def test_agentic_callback_scoped_to_cd_pattern(agentic_settings, deps):
-    """Agentic callback handler is registered with cd: pattern filter."""
+async def test_agentic_callback_includes_cd_pattern(agentic_settings, deps):
+    """Agentic callback handlers include cd: pattern filter."""
     orchestrator = MessageOrchestrator(agentic_settings, deps)
     app = MagicMock()
     app.add_handler = MagicMock()
@@ -310,10 +313,11 @@ async def test_agentic_callback_scoped_to_cd_pattern(agentic_settings, deps):
         if isinstance(call[0][0], CallbackQueryHandler)
     ]
 
-    assert len(cb_handlers) == 1
-    # The pattern attribute should match cd: prefixed data
-    assert cb_handlers[0].pattern is not None
-    assert cb_handlers[0].pattern.match("cd:my_project")
+    # 3 callback handlers: cd:, fb:, escalate:
+    assert len(cb_handlers) == 3
+    # At least one pattern should match cd: prefixed data
+    cd_handlers = [h for h in cb_handlers if h.pattern and h.pattern.match("cd:my_project")]
+    assert len(cd_handlers) == 1
 
 
 async def test_agentic_document_rejects_large_files(agentic_settings, deps):
@@ -368,13 +372,20 @@ async def test_agentic_text_logs_failure_on_error(agentic_settings, deps):
 
     update = MagicMock()
     update.effective_user.id = 123
+    update.effective_chat.id = 123
+    update.effective_chat.type = "private"
+    update.effective_message = update.message
     update.message.text = "do something"
     update.message.message_id = 1
+    update.message.entities = []
+    update.message.reply_to_message = None
+    update.message.message_thread_id = None
     update.message.chat.send_action = AsyncMock()
     update.message.reply_text = AsyncMock()
 
     progress_msg = AsyncMock()
     progress_msg.delete = AsyncMock()
+    progress_msg.edit_text = AsyncMock()
     update.message.reply_text.return_value = progress_msg
 
     context = MagicMock()
@@ -385,6 +396,11 @@ async def test_agentic_text_logs_failure_on_error(agentic_settings, deps):
         "storage": None,
         "rate_limiter": None,
         "audit_logger": audit_logger,
+        "model_router": None,
+        "memory_manager": None,
+        "assistant_dispatcher": None,
+        "chat_provider_pool": None,
+        "task_manager": None,
     }
 
     await orchestrator.agentic_text(update, context)

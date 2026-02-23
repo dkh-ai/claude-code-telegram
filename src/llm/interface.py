@@ -42,6 +42,7 @@ class LLMProvider(Protocol):
         session_id: Optional[str] = None,
         stream_callback: Optional[Callable[..., Any]] = None,
         force_new: bool = False,
+        model: Optional[str] = None,
     ) -> LLMResponse:
         """Execute a prompt against the LLM provider.
 
@@ -52,6 +53,7 @@ class LLMProvider(Protocol):
             session_id: Optional session ID to resume a conversation.
             stream_callback: Optional callback for streaming updates.
             force_new: If True, force a new session instead of resuming.
+            model: Optional model ID override (e.g., "claude-opus-4-6").
 
         Returns:
             LLMResponse with the execution result.

@@ -156,6 +156,7 @@ class ClaudeSDKManager:
         session_id: Optional[str] = None,
         continue_session: bool = False,
         stream_callback: Optional[Callable[[StreamUpdate], None]] = None,
+        model: Optional[str] = None,
     ) -> ClaudeResponse:
         """Execute Claude Code command via SDK."""
         start_time = asyncio.get_event_loop().time()
@@ -186,6 +187,11 @@ class ClaudeSDKManager:
                     "Use relative paths."
                 ),
             )
+
+            # Apply model override if specified
+            if model:
+                options.model = model
+                logger.info("Using model override", model=model)
 
             # Pass MCP server configuration if enabled
             if self.config.enable_mcp and self.config.mcp_config_path:

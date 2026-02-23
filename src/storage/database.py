@@ -344,6 +344,67 @@ class DatabaseManager:
                     ON background_tasks(project_path);
                 """,
             ),
+            (
+                6,
+                """
+                -- Model routing, memory, and intent tracking
+
+                -- Extend cost_tracking with model/mode info
+                ALTER TABLE cost_tracking ADD COLUMN model TEXT;
+                ALTER TABLE cost_tracking ADD COLUMN mode TEXT;
+                ALTER TABLE cost_tracking ADD COLUMN feedback TEXT;
+                ALTER TABLE cost_tracking ADD COLUMN was_escalated BOOLEAN DEFAULT FALSE;
+
+                -- Intent classification log (for self-improving routing)
+                CREATE TABLE IF NOT EXISTS intent_log (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    message_hash TEXT NOT NULL,
+                    detected_mode TEXT NOT NULL,
+                    confidence REAL NOT NULL,
+                    method TEXT NOT NULL,
+                    was_correct BOOLEAN DEFAULT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+
+                -- User memory — persistent facts and preferences
+                CREATE TABLE IF NOT EXISTS user_memory (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL,
+                    category TEXT NOT NULL,
+                    fact TEXT NOT NULL,
+                    source TEXT,
+                    confidence REAL DEFAULT 1.0,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(user_id, category, fact)
+                );
+                CREATE INDEX IF NOT EXISTS idx_user_memory_user
+                    ON user_memory(user_id);
+
+                -- Conversation summaries — compressed session history
+                CREATE TABLE IF NOT EXISTS conversation_summaries (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL,
+                    session_id TEXT,
+                    summary TEXT NOT NULL,
+                    key_topics TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+                CREATE INDEX IF NOT EXISTS idx_conv_summaries_user
+                    ON conversation_summaries(user_id);
+
+                -- Reminders table for ReminderPlugin
+                CREATE TABLE IF NOT EXISTS reminders (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL,
+                    reminder_text TEXT NOT NULL,
+                    remind_at TIMESTAMP NOT NULL,
+                    recurring TEXT,
+                    is_sent BOOLEAN DEFAULT FALSE,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+                """,
+            ),
         ]
 
     async def _init_pool(self):

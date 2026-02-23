@@ -37,6 +37,7 @@ class ClaudeProvider:
         session_id: Optional[str] = None,
         stream_callback: Optional[Callable[..., Any]] = None,
         force_new: bool = False,
+        model: Optional[str] = None,
     ) -> LLMResponse:
         """Execute a prompt via ClaudeIntegration.
 
@@ -54,6 +55,7 @@ class ClaudeProvider:
                 session_id=session_id,
                 on_stream=stream_callback,
                 force_new=force_new,
+                model=model,
             )
 
             return LLMResponse(

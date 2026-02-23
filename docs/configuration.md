@@ -77,6 +77,26 @@ CLAUDE_MAX_COST_PER_USER=10.0
 CLAUDE_ALLOWED_TOOLS=Read,Write,Edit,Bash,Glob,Grep,LS,Task,TaskOutput,MultiEdit,NotebookRead,NotebookEdit,WebFetch,TodoRead,TodoWrite,WebSearch
 ```
 
+#### Model Routing
+
+```bash
+# Default models for each execution mode
+MODEL_AGENT_DEFAULT=claude-sonnet-4-5-20250514
+MODEL_AGENT_HEAVY=claude-opus-4-6
+MODEL_CHAT_DEFAULT=deepseek-chat
+MODEL_CHAT_FALLBACK=gpt-4o-mini
+MODEL_BACKGROUND=claude-sonnet-4-5-20250514
+MODEL_ROUTER_LLM=deepseek-chat
+
+# Vendor API keys (required for non-Claude models)
+OPENAI_API_KEY=sk-...
+DEEPSEEK_API_KEY=sk-...
+
+# Routing behavior
+AUTO_ROUTE_ENABLED=true          # Enable automatic intent-based routing
+MODEL_OVERRIDE_ALLOWED=true       # Allow users to override model via /model
+```
+
 #### Rate Limiting
 
 ```bash
