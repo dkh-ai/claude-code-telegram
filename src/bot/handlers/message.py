@@ -470,9 +470,9 @@ async def handle_text_message(
         context.user_data["last_message"] = update.message.text
 
         # Add conversation enhancements if available
-        features = context.bot_data.get("features")
+        feature_registry = context.bot_data.get("feature_registry")
         conversation_enhancer = (
-            features.get_conversation_enhancer() if features else None
+            feature_registry.get_conversation_enhancer() if feature_registry else None
         )
 
         if conversation_enhancer and claude_response:
@@ -617,8 +617,8 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         )
 
         # Check if enhanced file handler is available
-        features = context.bot_data.get("features")
-        file_handler = features.get_file_handler() if features else None
+        feature_registry = context.bot_data.get("feature_registry")
+        file_handler = feature_registry.get_file_handler() if feature_registry else None
 
         if file_handler:
             # Use enhanced file handler
@@ -786,8 +786,8 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     settings: Settings = context.bot_data["settings"]
 
     # Check if enhanced image handler is available
-    features = context.bot_data.get("features")
-    image_handler = features.get_image_handler() if features else None
+    feature_registry = context.bot_data.get("feature_registry")
+    image_handler = feature_registry.get_image_handler() if feature_registry else None
 
     if image_handler:
         try:

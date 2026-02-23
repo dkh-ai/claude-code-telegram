@@ -67,8 +67,8 @@ class ClaudeCodeBot:
             security=self.deps.get("security"),
         )
 
-        # Add feature registry to dependencies
-        self.deps["features"] = self.feature_registry
+        # Add feature registry to dependencies (separate from FeatureFlags)
+        self.deps["feature_registry"] = self.feature_registry
 
         # Set bot commands for menu
         await self._set_bot_commands()

@@ -1088,9 +1088,9 @@ async def handle_git_callback(
     """Handle git-related callbacks."""
     user_id = query.from_user.id
     settings: Settings = context.bot_data["settings"]
-    features = context.bot_data.get("features")
+    feature_registry = context.bot_data.get("feature_registry")
 
-    if not features or not features.is_enabled("git"):
+    if not feature_registry or not feature_registry.is_enabled("git"):
         await query.edit_message_text(
             "❌ <b>Git Integration Disabled</b>\n\n"
             "Git integration feature is not enabled.",
@@ -1103,7 +1103,7 @@ async def handle_git_callback(
     )
 
     try:
-        git_integration = features.get_git_integration()
+        git_integration = feature_registry.get_git_integration()
         if not git_integration:
             await query.edit_message_text(
                 "❌ <b>Git Integration Unavailable</b>\n\n"
@@ -1223,7 +1223,7 @@ async def handle_export_callback(
 ) -> None:
     """Handle export format selection callbacks."""
     user_id = query.from_user.id
-    features = context.bot_data.get("features")
+    feature_registry = context.bot_data.get("feature_registry")
 
     if export_format == "cancel":
         await query.edit_message_text(
@@ -1232,7 +1232,7 @@ async def handle_export_callback(
         )
         return
 
-    session_exporter = features.get_session_export() if features else None
+    session_exporter = feature_registry.get_session_export() if feature_registry else None
     if not session_exporter:
         await query.edit_message_text(
             "❌ <b>Export Unavailable</b>\n\n"

@@ -956,8 +956,8 @@ class MessageOrchestrator:
         progress_msg = await update.message.reply_text("Working...")
 
         # Try enhanced file handler, fall back to basic
-        features = context.bot_data.get("features")
-        file_handler = features.get_file_handler() if features else None
+        feature_registry = context.bot_data.get("feature_registry")
+        file_handler = feature_registry.get_file_handler() if feature_registry else None
         prompt: Optional[str] = None
 
         if file_handler:
@@ -1067,8 +1067,8 @@ class MessageOrchestrator:
         """Process photo -> Claude, minimal chrome."""
         user_id = update.effective_user.id
 
-        features = context.bot_data.get("features")
-        image_handler = features.get_image_handler() if features else None
+        feature_registry = context.bot_data.get("feature_registry")
+        image_handler = feature_registry.get_image_handler() if feature_registry else None
 
         if not image_handler:
             await update.message.reply_text("Photo processing is not available.")

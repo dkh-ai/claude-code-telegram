@@ -953,10 +953,10 @@ async def session_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 async def export_session(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle /export command."""
     update.effective_user.id
-    features = context.bot_data.get("features")
+    feature_registry = context.bot_data.get("feature_registry")
 
     # Check if session export is available
-    session_exporter = features.get_session_export() if features else None
+    session_exporter = feature_registry.get_session_export() if feature_registry else None
 
     if not session_exporter:
         await update.message.reply_text(
@@ -1073,9 +1073,9 @@ async def quick_actions(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     """Handle /actions command to show quick actions."""
     user_id = update.effective_user.id
     settings: Settings = context.bot_data["settings"]
-    features = context.bot_data.get("features")
+    feature_registry = context.bot_data.get("feature_registry")
 
-    if not features or not features.is_enabled("quick_actions"):
+    if not feature_registry or not feature_registry.is_enabled("quick_actions"):
         await update.message.reply_text(
             "❌ <b>Quick Actions Disabled</b>\n\n"
             "Quick actions feature is not enabled.\n"
@@ -1089,7 +1089,7 @@ async def quick_actions(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     )
 
     try:
-        quick_action_manager = features.get_quick_actions()
+        quick_action_manager = feature_registry.get_quick_actions()
         if not quick_action_manager:
             await update.message.reply_text(
                 "❌ <b>Quick Actions Unavailable</b>\n\n"
@@ -1134,9 +1134,9 @@ async def git_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     """Handle /git command to show git repository information."""
     user_id = update.effective_user.id
     settings: Settings = context.bot_data["settings"]
-    features = context.bot_data.get("features")
+    feature_registry = context.bot_data.get("feature_registry")
 
-    if not features or not features.is_enabled("git"):
+    if not feature_registry or not feature_registry.is_enabled("git"):
         await update.message.reply_text(
             "❌ <b>Git Integration Disabled</b>\n\n"
             "Git integration feature is not enabled.\n"
@@ -1150,7 +1150,7 @@ async def git_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     )
 
     try:
-        git_integration = features.get_git_integration()
+        git_integration = feature_registry.get_git_integration()
         if not git_integration:
             await update.message.reply_text(
                 "❌ <b>Git Integration Unavailable</b>\n\n"
