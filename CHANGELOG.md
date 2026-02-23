@@ -8,6 +8,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Background Task System** (Stage 3):
+  - `TaskManager` with full lifecycle management (start, stop, recover, retry)
+  - `HeartbeatService` for periodic progress notifications with stage detection
+  - `TaskNotificationHandler` delivering task events to Telegram with inline keyboards
+  - `LLMProvider` protocol abstraction with `ClaudeProvider` adapter and factory
+  - `TaskRepository` for SQLite persistence of background tasks
+  - Database migration v5: `background_tasks` table
+  - 5 new Telegram commands: `/task`, `/taskstatus`, `/tasklog`, `/taskstop`, `/taskcontinue`
+  - 3 callback handlers in orchestrator: `taskstop:`, `tasklog:`, `taskretry:`
+  - Running-task guard in `agentic_text()` to prevent concurrent interactive + background usage
+  - Per-project exclusivity, global concurrency limit, per-task cost cap
+  - `ENABLE_BACKGROUND_TASKS` feature flag and related settings
+  - 5 new event types: `TaskStartedEvent`, `TaskProgressEvent`, `TaskCompletedEvent`, `TaskFailedEvent`, `TaskTimeoutEvent`
+  - Integration tests for full task lifecycle
 - **Version Management & Distribution**:
   - Single source of truth: version read from `pyproject.toml` via `importlib.metadata`
   - GitHub Release workflow triggered by `v*` tags -- runs tests, creates Release

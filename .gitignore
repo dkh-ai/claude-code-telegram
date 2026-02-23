@@ -146,3 +146,8 @@ data/
 sessions/
 backups/
 uploads/
+# SIM (Self-Improving Machine) data
+.learnings/sessions/
+.learnings/metrics/
+.learnings/.session-start-commit
+.learnings/.session-start-time

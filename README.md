@@ -100,6 +100,7 @@ The default conversational mode. Just talk to Claude naturally -- no special com
 
 **Commands:** `/start`, `/new`, `/status`, `/verbose`, `/repo`
 If `ENABLE_PROJECT_THREADS=true`: `/sync_threads`
+If `ENABLE_BACKGROUND_TASKS=true`: `/task`, `/taskstatus`, `/tasklog`, `/taskstop`, `/taskcontinue`
 
 ```
 You: What files are in this project?
@@ -171,6 +172,39 @@ You: /actions
 Bot: [Run Tests] [Install Deps] [Format Code] [Run Linter]
 ```
 
+### Background Tasks
+
+Run long-running Claude tasks in the background while continuing to chat. Enable with `ENABLE_BACKGROUND_TASKS=true` (default).
+
+```
+You: /task Add comprehensive error handling to all API endpoints
+
+Bot: Task started
+     ID: abc123
+     Will send updates as it progresses.
+
+Bot: [60s later] Running... 1m 0s | $0.42
+     Stage: writing code
+
+Bot: [completion] Task abc123 completed!
+     Duration: 3m 24s | Cost: $1.15
+     Commits: 2
+     * feat: add error handling to user endpoints
+     * feat: add error handling to payment endpoints
+```
+
+**Commands:**
+
+| Command | Description |
+|---------|-------------|
+| `/task <prompt>` | Start a background task |
+| `/taskstatus` | Show all running tasks |
+| `/tasklog` | View last output of a task |
+| `/taskstop [id]` | Stop a running task |
+| `/taskcontinue <prompt>` | Resume with previous session context |
+
+Background tasks enforce per-project exclusivity, global concurrency limits, and per-task cost caps.
+
 ## Event-Driven Automation
 
 Beyond direct chat, the bot can respond to external triggers:
@@ -204,6 +238,8 @@ Enable with `ENABLE_API_SERVER=true` and `ENABLE_SCHEDULER=true`. See [docs/setu
 - Webhook API server (GitHub HMAC-SHA256, generic Bearer token auth)
 - Job scheduler with cron expressions and persistent storage
 - Notification service with per-chat rate limiting
+- Background task execution with heartbeat monitoring and cost limits
+- LLM provider abstraction for future multi-model support
 
 - Tunable verbose output showing Claude's tool usage and reasoning in real-time
 - Persistent typing indicator so users always know the bot is working
@@ -262,6 +298,18 @@ ENABLE_SCHEDULER=false           # Enable cron job scheduler
 
 # Notifications
 NOTIFICATION_CHAT_IDS=123,456    # Default chat IDs for proactive notifications
+```
+
+### Background Tasks
+
+```bash
+ENABLE_BACKGROUND_TASKS=true    # Enable /task commands (default: true)
+HEARTBEAT_INTERVAL_SECONDS=60   # Progress notification interval
+TASK_TIMEOUT_SECONDS=300        # Idle timeout before task is flagged
+TASK_MAX_DURATION_SECONDS=3600  # Maximum task duration (1 hour)
+TASK_MAX_COST=10.0              # Max cost per task (USD)
+MAX_CONCURRENT_TASKS=3          # Global concurrency limit
+LLM_PROVIDER=claude_sdk         # LLM backend (claude_sdk or gateway)
 ```
 
 ### Project Threads Mode
