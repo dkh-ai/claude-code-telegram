@@ -893,37 +893,124 @@ class MessageOrchestrator:
         query = update.callback_query
         await query.answer("Escalating...")
 
-        # Get the original message text from the replied-to message
-        original_msg = query.message.reply_to_message
-        if not original_msg or not original_msg.text:
-            await query.answer("Cannot escalate — original message not found.")
+        router = context.bot_data.get("model_router")
+        if not router:
+            await query.answer("Router not available.")
             return
 
-        # Force escalation by setting temporary override
-        router = context.bot_data.get("model_router")
-        if router:
-            from ..llm.router import RoutingDecision
+        from ..llm.router import RoutingDecision
 
-            current_model = context.user_data.get(
-                "_last_model", self.settings.model_agent_default
-            )
-            current_decision = RoutingDecision(
-                mode="chat", model=current_model, confidence=0.5, method="escalation"
-            )
-            next_decision = router.escalate(current_decision)
-            if next_decision:
-                context.user_data["model_override"] = next_decision.model
-                # Re-send message
-                try:
-                    await query.message.edit_text(
-                        f"\U0001f504 Escalating to <code>{next_decision.model}</code>...",
-                        parse_mode="HTML",
+        current_model = context.user_data.get(
+            "_last_model", self.settings.model_agent_default
+        )
+        current_mode = context.user_data.get("_last_mode", "chat")
+        current_decision = RoutingDecision(
+            mode=current_mode, model=current_model, confidence=0.5, method="escalation"
+        )
+        next_decision = router.escalate(current_decision)
+        if not next_decision:
+            await query.answer("No more models to escalate to.")
+            return
+
+        original_text = context.user_data.get("_last_user_message")
+        if not original_text:
+            await query.answer("Original message not found.")
+            return
+
+        user_id = query.from_user.id
+        chat = query.message.chat
+
+        # Show escalation progress
+        progress_msg = await chat.send_message(
+            f"\U0001f504 Escalating to <code>{next_decision.model}</code>...",
+            parse_mode="HTML",
+        )
+
+        await chat.send_action("typing")
+
+        response_text = None
+        response_cost = 0.0
+        response_duration_ms = 0
+
+        try:
+            if next_decision.mode == "chat":
+                start_time = time.time()
+                response_text = await self._execute_chat(
+                    original_text, context, next_decision.model, user_id
+                )
+                response_duration_ms = int((time.time() - start_time) * 1000)
+            else:
+                # Agent mode escalation
+                claude_integration = context.bot_data.get("claude_integration")
+                if claude_integration:
+                    current_dir = context.user_data.get(
+                        "current_directory", self.settings.approved_directory
                     )
-                except Exception:
-                    pass
-                return
+                    session_id = context.user_data.get("claude_session_id")
+                    claude_response = await claude_integration.run_command(
+                        prompt=original_text,
+                        working_directory=current_dir,
+                        user_id=user_id,
+                        session_id=session_id,
+                        model=next_decision.model
+                        if next_decision.model != self.settings.model_agent_default
+                        else None,
+                    )
+                    response_text = claude_response.content
+                    response_cost = claude_response.cost
+                    response_duration_ms = claude_response.duration_ms
+                    context.user_data["claude_session_id"] = claude_response.session_id
+        except Exception as e:
+            logger.error("Escalation failed", error=str(e))
+            try:
+                await progress_msg.edit_text(
+                    f"Escalation failed: {escape_html(str(e)[:200])}",
+                    parse_mode="HTML",
+                )
+            except Exception:
+                pass
+            return
 
-        await query.answer("No more models to escalate to.")
+        try:
+            await progress_msg.delete()
+        except Exception:
+            pass
+
+        # Update tracking
+        context.user_data["_last_model"] = next_decision.model
+        context.user_data["_last_mode"] = next_decision.mode
+
+        if response_text:
+            from .utils.formatting import ResponseFormatter
+
+            formatter = ResponseFormatter(self.settings)
+            formatted = formatter.format_claude_response(response_text)
+
+            feedback_keyboard = self._make_feedback_keyboard(
+                query.message.message_id,
+                next_decision.model,
+                response_cost,
+                response_duration_ms,
+            )
+
+            for i, msg in enumerate(formatted):
+                text = msg.text
+                if not text or not text.strip():
+                    continue
+                if i == len(formatted) - 1:
+                    duration_s = response_duration_ms / 1000
+                    text += f"\n\n<i>[{next_decision.model} · ${response_cost:.4f} · {duration_s:.1f}s]</i>"
+
+                try:
+                    await chat.send_message(
+                        text,
+                        parse_mode=msg.parse_mode or "HTML",
+                        reply_markup=feedback_keyboard if i == len(formatted) - 1 else None,
+                    )
+                except Exception as e:
+                    logger.error("Failed to send escalated response", error=str(e))
+        else:
+            await chat.send_message("Escalation produced no response.")
 
     async def agentic_text(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
@@ -991,6 +1078,9 @@ class MessageOrchestrator:
         memory_ctx = None
         if memory_manager:
             memory_ctx = await memory_manager.recall(user_id, message_text)
+
+        # Save for escalation callback
+        context.user_data["_last_user_message"] = message_text
 
         # Route intent
         router = context.bot_data.get("model_router")
@@ -1061,8 +1151,32 @@ class MessageOrchestrator:
                 )
                 response_duration_ms = int((time.time() - start_time) * 1000)
 
+                # Auto-escalate if response is weak
+                if response_text and self._should_escalate(response_text, message_text):
+                    if router:
+                        next_decision = router.escalate(decision)
+                        if next_decision:
+                            logger.info(
+                                "Auto-escalating",
+                                from_model=decision.model,
+                                to_model=next_decision.model,
+                            )
+                            decision = next_decision
+                            response_model = next_decision.model
+                            context.user_data["_last_model"] = next_decision.model
+                            context.user_data["_last_mode"] = next_decision.mode
+                            if next_decision.mode == "chat":
+                                start_time = time.time()
+                                response_text = await self._execute_chat(
+                                    message_text, context, next_decision.model, user_id
+                                )
+                                response_duration_ms = int((time.time() - start_time) * 1000)
+                            else:
+                                # Escalated beyond chat — will be handled by agent block
+                                response_text = None
+
                 if response_text is None:
-                    # No chat provider available, fall back to agent
+                    # No chat provider available or escalated to agent
                     decision.mode = "agent"
                     decision.model = self.settings.model_agent_default
 
@@ -1164,7 +1278,7 @@ class MessageOrchestrator:
 
         # Build feedback keyboard for non-agent responses
         feedback_keyboard = None
-        if decision.mode in ("chat", "assistant") and success:
+        if success:
             msg_id = update.message.message_id
             feedback_keyboard = self._make_feedback_keyboard(
                 msg_id, response_model, response_cost, response_duration_ms
@@ -1177,7 +1291,7 @@ class MessageOrchestrator:
 
             # Add model badge to last message
             text = message.text
-            if i == len(formatted_messages) - 1 and decision.mode in ("chat", "assistant"):
+            if i == len(formatted_messages) - 1:
                 duration_s = response_duration_ms / 1000
                 text += f"\n\n<i>[{response_model} · ${response_cost:.4f} · {duration_s:.1f}s]</i>"
 

@@ -19,6 +19,7 @@
   - Private DM: always respond; Group: only on @mention or reply-to-bot
   - Silent observation in groups (memory extraction without responding)
 - [x] **Unit tests for new modules** -- 264 tests covering all new modules (797 total)
+- [x] **Wire routing into orchestrator** -- Tri-mode execution in `agentic_text()`, memory injection, feedback/escalation buttons, `/model` command, cost tracking with model/mode
 
 ## High Priority
 
@@ -32,12 +33,6 @@
   - Serialize task parameters before shutdown (prompt, project, cost budget)
   - Re-queue in-progress tasks on startup with session context
   - Distinguish "crashed" vs "intentionally stopped" tasks
-
-- [ ] **Wire routing into orchestrator** -- `IntentRouter`, `ChatProviderPool`, `AssistantDispatcher`, `MemoryManager` created but not yet integrated into `MessageOrchestrator.agentic_text()`
-  - Tri-mode execution flow (agent/chat/assistant)
-  - Memory injection into prompts
-  - Auto-escalation on short/failing responses
-  - Feedback buttons (thumbs up/down, retry)
 
 ## Medium Priority
 
