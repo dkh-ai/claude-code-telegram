@@ -405,6 +405,21 @@ class DatabaseManager:
                 );
                 """,
             ),
+            (
+                7,
+                """
+                -- Group allowlist and pending usernames
+                ALTER TABLE users ADD COLUMN pending_username TEXT;
+
+                CREATE TABLE IF NOT EXISTS allowed_groups (
+                    group_id INTEGER PRIMARY KEY,
+                    group_title TEXT NOT NULL,
+                    group_username TEXT,
+                    added_by INTEGER NOT NULL,
+                    added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+                """,
+            ),
         ]
 
     async def _init_pool(self):

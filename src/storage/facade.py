@@ -18,6 +18,7 @@ from .models import (
     UserModel,
 )
 from .repositories import (
+    AllowedGroupRepository,
     AnalyticsRepository,
     AuditLogRepository,
     CostTrackingRepository,
@@ -44,6 +45,7 @@ class Storage:
         self.tools = ToolUsageRepository(self.db_manager)
         self.audit = AuditLogRepository(self.db_manager)
         self.costs = CostTrackingRepository(self.db_manager)
+        self.allowed_groups = AllowedGroupRepository(self.db_manager)
         self.analytics = AnalyticsRepository(self.db_manager)
 
     async def initialize(self):

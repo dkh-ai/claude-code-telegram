@@ -62,7 +62,7 @@ class TestWhitelistAuthProvider:
 
     async def test_allowed_user_authentication(self):
         """Test authentication of allowed user."""
-        provider = WhitelistAuthProvider([123, 456])
+        provider = WhitelistAuthProvider(allowed_users=[123, 456])
 
         # Test allowed user
         result = await provider.authenticate(123, {})
@@ -74,7 +74,7 @@ class TestWhitelistAuthProvider:
 
     async def test_get_user_info(self):
         """Test user info retrieval."""
-        provider = WhitelistAuthProvider([123])
+        provider = WhitelistAuthProvider(allowed_users=[123])
 
         # Allowed user
         info = await provider.get_user_info(123)
@@ -201,7 +201,7 @@ class TestAuthenticationManager:
 
     @pytest.fixture
     def auth_manager(self):
-        whitelist_provider = WhitelistAuthProvider([123, 456])
+        whitelist_provider = WhitelistAuthProvider(allowed_users=[123, 456])
         token_storage = InMemoryTokenStorage()
         token_provider = TokenAuthProvider("secret123", token_storage)
 

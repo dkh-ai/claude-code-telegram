@@ -29,6 +29,30 @@ async def auth_middleware(handler: Callable, event: Any, data: Dict[str, Any]) -
         logger.warning("No user information in update")
         return
 
+    # Resolve pending username (user allowed by @username before they messaged)
+    if username:
+        storage = data.get("storage")
+        if storage:
+            try:
+                activated = await storage.users.resolve_pending(username, user_id)
+                if activated:
+                    auth_manager_pre = data.get("auth_manager")
+                    if auth_manager_pre:
+                        for p in auth_manager_pre.providers:
+                            if hasattr(p, "invalidate_cache"):
+                                await p.invalidate_cache()
+                    logger.info(
+                        "Pending user activated",
+                        user_id=user_id,
+                        username=username,
+                    )
+            except Exception as e:
+                logger.warning(
+                    "Failed to resolve pending username",
+                    username=username,
+                    error=str(e),
+                )
+
     # Get dependencies from context
     auth_manager = data.get("auth_manager")
     audit_logger = data.get("audit_logger")
@@ -52,6 +76,23 @@ async def auth_middleware(handler: Callable, event: Any, data: Dict[str, Any]) -
                 username=username,
                 auth_provider=session.auth_provider if session else None,
             )
+
+        # Group allowlist check (even for existing sessions)
+        chat = event.effective_chat
+        if chat and getattr(chat, "type", "") in ("group", "supergroup"):
+            storage = data.get("storage")
+            if storage:
+                try:
+                    is_group_ok = await storage.allowed_groups.is_allowed(chat.id)
+                    if not is_group_ok:
+                        logger.debug(
+                            "Group not in allowlist (existing session)",
+                            chat_id=chat.id,
+                            user_id=user_id,
+                        )
+                        return  # Silently ignore
+                except Exception:
+                    pass
 
         # Continue to handler
         return await handler(event, data)
@@ -81,6 +122,27 @@ async def auth_middleware(handler: Callable, event: Any, data: Dict[str, Any]) -
             username=username,
             auth_provider=session.auth_provider if session else None,
         )
+
+        # Group allowlist check
+        chat = event.effective_chat
+        if chat and getattr(chat, "type", "") in ("group", "supergroup"):
+            storage = data.get("storage")
+            if storage:
+                try:
+                    is_group_ok = await storage.allowed_groups.is_allowed(chat.id)
+                    if not is_group_ok:
+                        logger.info(
+                            "Group not in allowlist",
+                            chat_id=chat.id,
+                            user_id=user_id,
+                        )
+                        return  # Silently ignore — group not whitelisted
+                except Exception as e:
+                    logger.warning(
+                        "Failed group allowlist check",
+                        chat_id=chat.id,
+                        error=str(e),
+                    )
 
         # Welcome message for new session
         if event.effective_message:

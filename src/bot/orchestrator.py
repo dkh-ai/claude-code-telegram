@@ -314,6 +314,27 @@ class MessageOrchestrator:
         if self.settings.enable_project_threads:
             handlers.append(("sync_threads", command.sync_threads))
 
+        # Admin commands (always registered, access checked inside handlers)
+        from .handlers.admin_commands import (
+            allow_command,
+            allowgroup_command,
+            deny_command,
+            denygroup_command,
+            listgroups_command,
+            listusers_command,
+            whoami_command,
+        )
+
+        handlers.extend([
+            ("allow", allow_command),
+            ("deny", deny_command),
+            ("allowgroup", allowgroup_command),
+            ("denygroup", denygroup_command),
+            ("listusers", listusers_command),
+            ("listgroups", listgroups_command),
+            ("whoami", whoami_command),
+        ])
+
         # Background task commands (conditional on feature flag)
         features = self.deps.get("features")
         if features and features.background_tasks_enabled:
@@ -463,6 +484,15 @@ class MessageOrchestrator:
                 BotCommand("repo", "List repos / switch workspace"),
                 BotCommand("model", "Switch model (auto/haiku/sonnet/opus/gpt/deepseek)"),
             ]
+            commands.extend([
+                BotCommand("allow", "Add user to allowlist (master)"),
+                BotCommand("deny", "Remove user (master)"),
+                BotCommand("allowgroup", "Add group (master)"),
+                BotCommand("denygroup", "Remove group (master)"),
+                BotCommand("listusers", "List users (master)"),
+                BotCommand("listgroups", "List groups (master)"),
+                BotCommand("whoami", "Show your info"),
+            ])
             if self.settings.enable_project_threads:
                 commands.append(BotCommand("sync_threads", "Sync project topics"))
             features = self.deps.get("features")

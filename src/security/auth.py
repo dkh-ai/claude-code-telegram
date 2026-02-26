@@ -60,32 +60,105 @@ class AuthProvider(ABC):
 
 
 class WhitelistAuthProvider(AuthProvider):
-    """Whitelist-based authentication."""
+    """DB-backed whitelist authentication with in-memory cache."""
 
-    def __init__(self, allowed_users: List[int], allow_all_dev: bool = False):
-        self.allowed_users = set(allowed_users)
+    def __init__(
+        self,
+        user_repo: Any = None,
+        master_user_id: Optional[int] = None,
+        allow_all_dev: bool = False,
+        allowed_users: Optional[List[int]] = None,
+    ):
+        # New DB-backed mode
+        self.user_repo = user_repo
+        self.master_user_id = master_user_id
         self.allow_all_dev = allow_all_dev
+
+        # Cache for DB-backed mode
+        self._cache: set = set()
+        self._cache_ts: datetime = datetime.min.replace(tzinfo=UTC)
+        self._cache_ttl: timedelta = timedelta(seconds=60)
+
+        # Legacy static mode (for backwards compat in tests)
+        self._static_users: Optional[set] = None
+        if allowed_users is not None and user_repo is None:
+            self._static_users = set(allowed_users)
+
+        user_count = len(self._static_users) if self._static_users else "DB-backed"
         logger.info(
             "Whitelist auth provider initialized",
-            allowed_users=len(self.allowed_users),
+            allowed_users=user_count,
+            master_user_id=master_user_id,
             allow_all_dev=allow_all_dev,
         )
 
     async def authenticate(self, user_id: int, credentials: Dict[str, Any]) -> bool:
         """Authenticate user against whitelist."""
-        is_allowed = self.allow_all_dev or user_id in self.allowed_users
+        if self.master_user_id and user_id == self.master_user_id:
+            return True
+        if self.allow_all_dev:
+            return True
+
+        # Legacy static mode
+        if self._static_users is not None:
+            is_allowed = user_id in self._static_users
+            logger.info(
+                "Whitelist authentication attempt",
+                user_id=user_id,
+                success=is_allowed,
+            )
+            return is_allowed
+
+        # DB-backed mode with cache
+        if datetime.now(UTC) - self._cache_ts > self._cache_ttl:
+            await self._refresh_cache()
+        is_allowed = user_id in self._cache
         logger.info(
             "Whitelist authentication attempt", user_id=user_id, success=is_allowed
         )
         return is_allowed
 
+    async def _refresh_cache(self) -> None:
+        """Refresh the allowed users cache from DB."""
+        if not self.user_repo:
+            return
+        ids = await self.user_repo.get_allowed_users()
+        self._cache = set(ids)
+        if self.master_user_id:
+            self._cache.add(self.master_user_id)
+        self._cache_ts = datetime.now(UTC)
+
+    async def invalidate_cache(self) -> None:
+        """Force cache refresh."""
+        await self._refresh_cache()
+
     async def get_user_info(self, user_id: int) -> Optional[Dict[str, Any]]:
         """Get user information if whitelisted."""
-        if self.allow_all_dev or user_id in self.allowed_users:
+        is_master = bool(self.master_user_id and user_id == self.master_user_id)
+        if self.allow_all_dev or is_master:
             return {
                 "user_id": user_id,
                 "auth_type": "whitelist" + ("_dev" if self.allow_all_dev else ""),
+                "permissions": ["basic", "admin"] if is_master else ["basic"],
+                "is_master": is_master,
+            }
+        # Static mode
+        if self._static_users is not None:
+            if user_id in self._static_users:
+                return {
+                    "user_id": user_id,
+                    "auth_type": "whitelist",
+                    "permissions": ["basic"],
+                    "is_master": False,
+                }
+            return None
+        # DB-backed: check cache
+        if user_id in self._cache:
+            return {
+                "user_id": user_id,
+                "auth_type": "whitelist",
                 "permissions": ["basic"],
+                "is_master": False,
             }
         return None
 

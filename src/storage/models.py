@@ -35,6 +35,7 @@ class UserModel:
     first_seen: Optional[datetime] = None
     last_active: Optional[datetime] = None
     is_allowed: bool = False
+    pending_username: Optional[str] = None
     total_cost: float = 0.0
     message_count: int = 0
     session_count: int = 0
@@ -315,3 +316,28 @@ class UserTokenModel:
         if not self.expires_at:
             return False
         return datetime.now(UTC) > self.expires_at
+
+
+@dataclass
+class AllowedGroupModel:
+    """Allowed group data model."""
+
+    group_id: int
+    group_title: str
+    added_by: int
+    added_at: Optional[datetime] = None
+    group_username: Optional[str] = None
+
+    @classmethod
+    def from_row(cls, row: aiosqlite.Row) -> "AllowedGroupModel":
+        """Create from database row."""
+        data = dict(row)
+        data["added_at"] = _parse_datetime(data.get("added_at"))
+        return cls(**data)
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary."""
+        data = asdict(self)
+        if data["added_at"]:
+            data["added_at"] = data["added_at"].isoformat()
+        return data

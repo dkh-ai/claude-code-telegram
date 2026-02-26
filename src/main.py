@@ -37,6 +37,7 @@ from src.security.auth import (
 from src.security.rate_limiter import RateLimiter
 from src.security.validators import SecurityValidator
 from src.storage.facade import Storage
+from src.storage.models import UserModel
 from src.storage.session_storage import SQLiteSessionStorage
 
 # Background tasks (lazy imports moved here for wiring in create_application)
@@ -123,9 +124,45 @@ async def create_application(config: Settings) -> Dict[str, Any]:
     # Create security components
     providers = []
 
-    # Add whitelist provider if users are configured
-    if config.allowed_users:
-        providers.append(WhitelistAuthProvider(config.allowed_users))
+    # Add whitelist provider if users or master user are configured
+    if config.allowed_users or config.master_user_id:
+        whitelist_provider = WhitelistAuthProvider(
+            user_repo=storage.users,
+            master_user_id=config.master_user_id,
+        )
+        providers.append(whitelist_provider)
+
+        # Seed env users into DB on startup
+        for uid in config.allowed_users or []:
+            existing = await storage.users.get_user(uid)
+            if existing:
+                if not existing.is_allowed:
+                    await storage.users.set_user_allowed(uid, True)
+            else:
+                await storage.users.create_user(
+                    UserModel(user_id=uid, is_allowed=True)
+                )
+
+        # Seed master user
+        if config.master_user_id:
+            existing = await storage.users.get_user(config.master_user_id)
+            if existing:
+                if not existing.is_allowed:
+                    await storage.users.set_user_allowed(
+                        config.master_user_id, True
+                    )
+            else:
+                await storage.users.create_user(
+                    UserModel(user_id=config.master_user_id, is_allowed=True)
+                )
+
+        # Prime the cache
+        await whitelist_provider._refresh_cache()
+        logger.info(
+            "Seeded allowed users from env",
+            env_users=len(config.allowed_users or []),
+            master_user_id=config.master_user_id,
+        )
 
     # Add token provider if enabled
     if config.enable_token_auth:
@@ -138,7 +175,7 @@ async def create_application(config: Settings) -> Dict[str, Any]:
             "No auth providers configured"
             " - creating development-only allow-all provider"
         )
-        providers.append(WhitelistAuthProvider([], allow_all_dev=True))
+        providers.append(WhitelistAuthProvider(allow_all_dev=True))
     elif not providers:
         raise ConfigurationError("No authentication providers configured")
 
@@ -256,6 +293,7 @@ async def create_application(config: Settings) -> Dict[str, Any]:
         "chat_provider_pool": chat_pool,
         "assistant_dispatcher": assistant_dispatcher,
         "memory_manager": memory_manager,
+        "master_user_id": config.master_user_id,
     }
 
     bot = ClaudeCodeBot(config, dependencies)

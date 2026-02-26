@@ -82,8 +82,8 @@ def deps():
     }
 
 
-def test_agentic_registers_6_commands(agentic_settings, deps):
-    """Agentic mode registers start, new, status, verbose, repo, model commands."""
+def test_agentic_registers_commands(agentic_settings, deps):
+    """Agentic mode registers base + admin commands."""
     orchestrator = MessageOrchestrator(agentic_settings, deps)
     app = MagicMock()
     app.add_handler = MagicMock()
@@ -100,13 +100,21 @@ def test_agentic_registers_6_commands(agentic_settings, deps):
     ]
     commands = [h[0][0].commands for h in cmd_handlers]
 
-    assert len(cmd_handlers) == 6
+    # 6 base + 7 admin = 13
+    assert len(cmd_handlers) == 13
     assert frozenset({"start"}) in commands
     assert frozenset({"new"}) in commands
     assert frozenset({"status"}) in commands
     assert frozenset({"verbose"}) in commands
     assert frozenset({"repo"}) in commands
     assert frozenset({"model"}) in commands
+    assert frozenset({"allow"}) in commands
+    assert frozenset({"deny"}) in commands
+    assert frozenset({"allowgroup"}) in commands
+    assert frozenset({"denygroup"}) in commands
+    assert frozenset({"listusers"}) in commands
+    assert frozenset({"listgroups"}) in commands
+    assert frozenset({"whoami"}) in commands
 
 
 def test_classic_registers_13_commands(classic_settings, deps):
@@ -156,13 +164,18 @@ def test_agentic_registers_text_document_photo_handlers(agentic_settings, deps):
 
 
 async def test_agentic_bot_commands(agentic_settings, deps):
-    """Agentic mode returns 6 bot commands (including /model)."""
+    """Agentic mode returns 13 bot commands (6 base + 7 admin)."""
     orchestrator = MessageOrchestrator(agentic_settings, deps)
     commands = await orchestrator.get_bot_commands()
 
-    assert len(commands) == 6
+    assert len(commands) == 13
     cmd_names = [c.command for c in commands]
-    assert cmd_names == ["start", "new", "status", "verbose", "repo", "model"]
+    # Base commands
+    for cmd in ["start", "new", "status", "verbose", "repo", "model"]:
+        assert cmd in cmd_names
+    # Admin commands
+    for cmd in ["allow", "deny", "allowgroup", "denygroup", "listusers", "listgroups", "whoami"]:
+        assert cmd in cmd_names
 
 
 async def test_classic_bot_commands(classic_settings, deps):

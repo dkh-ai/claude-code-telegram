@@ -43,6 +43,9 @@ class Settings(BaseSettings):
     allowed_users: Optional[List[int]] = Field(
         None, description="Allowed Telegram user IDs"
     )
+    master_user_id: Optional[int] = Field(
+        None, description="Master user Telegram ID (has admin privileges)"
+    )
     enable_token_auth: bool = Field(
         False, description="Enable token-based authentication"
     )
@@ -298,6 +301,14 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=".env", env_file_encoding="utf-8", case_sensitive=False, extra="ignore"
     )
+
+    @field_validator("master_user_id", mode="before")
+    @classmethod
+    def parse_master_user(cls, v: Any) -> Optional[int]:
+        """Parse master user ID from string or int."""
+        if v is None or v == "":
+            return None
+        return int(str(v).strip()) if isinstance(v, (str, int)) else v
 
     @field_validator("allowed_users", "notification_chat_ids", mode="before")
     @classmethod

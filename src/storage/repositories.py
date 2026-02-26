@@ -14,6 +14,7 @@ import structlog
 
 from .database import DatabaseManager
 from .models import (
+    AllowedGroupModel,
     AuditLogModel,
     CostTrackingModel,
     MessageModel,
@@ -113,6 +114,106 @@ class UserRepository:
             cursor = await conn.execute("SELECT * FROM users ORDER BY first_seen DESC")
             rows = await cursor.fetchall()
             return [UserModel.from_row(row) for row in rows]
+
+    async def find_by_username(self, username: str) -> Optional[UserModel]:
+        """Find user by Telegram username (case-insensitive)."""
+        clean = username.lstrip("@").lower()
+        async with self.db.get_connection() as conn:
+            cursor = await conn.execute(
+                "SELECT * FROM users WHERE LOWER(telegram_username) = ?",
+                (clean,),
+            )
+            row = await cursor.fetchone()
+            if row:
+                return UserModel.from_row(row)
+            # Also check pending_username
+            cursor = await conn.execute(
+                "SELECT * FROM users WHERE LOWER(pending_username) = ?",
+                (clean,),
+            )
+            row = await cursor.fetchone()
+            return UserModel.from_row(row) if row else None
+
+    async def create_pending_user(self, username: str) -> int:
+        """Create a pending user entry for a username not yet seen.
+
+        Uses a negative temporary user_id. When the user first messages the bot,
+        resolve_pending() will update the real user_id.
+        """
+        clean = username.lstrip("@").lower()
+        async with self.db.get_connection() as conn:
+            # Generate a unique negative ID
+            cursor = await conn.execute(
+                "SELECT MIN(user_id) FROM users"
+            )
+            row = await cursor.fetchone()
+            min_id = row[0] if row and row[0] else 0
+            temp_id = min(min_id, 0) - 1
+
+            await conn.execute(
+                """INSERT INTO users
+                   (user_id, telegram_username, pending_username,
+                    is_allowed, first_seen, last_active)
+                   VALUES (?, ?, ?, TRUE, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)""",
+                (temp_id, clean, clean),
+            )
+            await conn.commit()
+            logger.info(
+                "Created pending user",
+                temp_id=temp_id,
+                pending_username=clean,
+            )
+            return temp_id
+
+    async def resolve_pending(self, username: str, real_user_id: int) -> bool:
+        """Activate a pending user when they first message the bot.
+
+        Returns True if a pending record was resolved.
+        """
+        clean = username.lower()
+        async with self.db.get_connection() as conn:
+            cursor = await conn.execute(
+                """SELECT user_id FROM users
+                   WHERE LOWER(pending_username) = ? AND user_id < 0""",
+                (clean,),
+            )
+            row = await cursor.fetchone()
+            if not row:
+                return False
+
+            old_id = row[0]
+            # Check if real user already exists
+            cursor = await conn.execute(
+                "SELECT user_id FROM users WHERE user_id = ?",
+                (real_user_id,),
+            )
+            existing = await cursor.fetchone()
+            if existing:
+                # Real user exists — just mark allowed and delete pending
+                await conn.execute(
+                    "UPDATE users SET is_allowed = TRUE WHERE user_id = ?",
+                    (real_user_id,),
+                )
+                await conn.execute(
+                    "DELETE FROM users WHERE user_id = ?", (old_id,)
+                )
+            else:
+                # Migrate pending row to real user_id
+                await conn.execute(
+                    """UPDATE users
+                       SET user_id = ?, pending_username = NULL,
+                           telegram_username = ?
+                       WHERE user_id = ?""",
+                    (real_user_id, clean, old_id),
+                )
+            await conn.commit()
+            logger.info(
+                "Resolved pending user",
+                username=clean,
+                old_id=old_id,
+                real_id=real_user_id,
+            )
+            return True
 
 
 class SessionRepository:
@@ -905,3 +1006,68 @@ class AnalyticsRepository:
                 "tool_stats": tool_stats,
                 "daily_activity": daily_activity,
             }
+
+
+class AllowedGroupRepository:
+    """Allowed group data access."""
+
+    def __init__(self, db_manager: DatabaseManager):
+        """Initialize repository."""
+        self.db = db_manager
+
+    async def is_allowed(self, group_id: int) -> bool:
+        """Check if a group is in the allowlist."""
+        async with self.db.get_connection() as conn:
+            cursor = await conn.execute(
+                "SELECT 1 FROM allowed_groups WHERE group_id = ?",
+                (group_id,),
+            )
+            row = await cursor.fetchone()
+            return row is not None
+
+    async def add(
+        self,
+        group_id: int,
+        title: str,
+        added_by: int,
+        username: Optional[str] = None,
+    ) -> None:
+        """Add a group to the allowlist."""
+        async with self.db.get_connection() as conn:
+            await conn.execute(
+                """INSERT INTO allowed_groups
+                   (group_id, group_title, group_username, added_by)
+                   VALUES (?, ?, ?, ?)
+                   ON CONFLICT(group_id) DO UPDATE SET
+                       group_title = excluded.group_title,
+                       group_username = excluded.group_username""",
+                (group_id, title, username, added_by),
+            )
+            await conn.commit()
+            logger.info(
+                "Group added to allowlist",
+                group_id=group_id,
+                title=title,
+            )
+
+    async def remove(self, group_id: int) -> bool:
+        """Remove a group from the allowlist. Returns True if removed."""
+        async with self.db.get_connection() as conn:
+            cursor = await conn.execute(
+                "DELETE FROM allowed_groups WHERE group_id = ?",
+                (group_id,),
+            )
+            await conn.commit()
+            removed = cursor.rowcount > 0
+            if removed:
+                logger.info("Group removed from allowlist", group_id=group_id)
+            return removed
+
+    async def get_all(self) -> List[AllowedGroupModel]:
+        """Get all allowed groups."""
+        async with self.db.get_connection() as conn:
+            cursor = await conn.execute(
+                "SELECT * FROM allowed_groups ORDER BY added_at DESC"
+            )
+            rows = await cursor.fetchall()
+            return [AllowedGroupModel.from_row(row) for row in rows]
