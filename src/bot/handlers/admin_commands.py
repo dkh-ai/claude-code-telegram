@@ -190,26 +190,47 @@ async def deny_command(
 async def allowgroup_command(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
-    """Add group to allowlist: /allowgroup <@groupname|chat_id>."""
+    """Add group to allowlist: /allowgroup [<@groupname|chat_id>].
+
+    Without arguments in a group chat — adds the current group.
+    """
     if not await _master_only(update, context):
         return
 
     args = update.message.text.split()[1:] if update.message.text else []
-    if not args:
-        await update.message.reply_text(
-            "Usage: <code>/allowgroup @groupname</code> or "
-            "<code>/allowgroup -100123456</code>",
-            parse_mode="HTML",
-        )
-        return
 
     storage = context.bot_data.get("storage")
     if not storage:
         await update.message.reply_text("Storage not available.")
         return
 
-    target = args[0]
     master_id = update.effective_user.id
+
+    if not args:
+        # No arguments — use current chat if it's a group
+        chat = update.effective_chat
+        if chat and chat.type in ("group", "supergroup"):
+            await storage.allowed_groups.add(
+                group_id=chat.id,
+                title=chat.title or str(chat.id),
+                added_by=master_id,
+                username=getattr(chat, "username", None),
+            )
+            await update.message.reply_text(
+                f"✅ This group <b>{escape_html(chat.title or str(chat.id))}</b> "
+                f"(<code>{chat.id}</code>) added to allowlist.",
+                parse_mode="HTML",
+            )
+            return
+        await update.message.reply_text(
+            "Usage: <code>/allowgroup @groupname</code>, "
+            "<code>/allowgroup -100123456</code>, "
+            "or run without arguments in a group chat.",
+            parse_mode="HTML",
+        )
+        return
+
+    target = args[0]
 
     try:
         if target.startswith("@"):
@@ -240,22 +261,42 @@ async def allowgroup_command(
 async def denygroup_command(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
-    """Remove group from allowlist: /denygroup <@groupname|chat_id>."""
+    """Remove group from allowlist: /denygroup [<@groupname|chat_id>].
+
+    Without arguments in a group chat — removes the current group.
+    """
     if not await _master_only(update, context):
         return
 
     args = update.message.text.split()[1:] if update.message.text else []
-    if not args:
-        await update.message.reply_text(
-            "Usage: <code>/denygroup @groupname</code> or "
-            "<code>/denygroup -100123456</code>",
-            parse_mode="HTML",
-        )
-        return
 
     storage = context.bot_data.get("storage")
     if not storage:
         await update.message.reply_text("Storage not available.")
+        return
+
+    if not args:
+        # No arguments — use current chat if it's a group
+        chat = update.effective_chat
+        if chat and chat.type in ("group", "supergroup"):
+            removed = await storage.allowed_groups.remove(chat.id)
+            if removed:
+                await update.message.reply_text(
+                    f"🚫 This group removed from allowlist.",
+                    parse_mode="HTML",
+                )
+            else:
+                await update.message.reply_text(
+                    "This group was not in the allowlist.",
+                    parse_mode="HTML",
+                )
+            return
+        await update.message.reply_text(
+            "Usage: <code>/denygroup @groupname</code>, "
+            "<code>/denygroup -100123456</code>, "
+            "or run without arguments in a group chat.",
+            parse_mode="HTML",
+        )
         return
 
     target = args[0]

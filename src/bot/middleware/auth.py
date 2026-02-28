@@ -78,8 +78,11 @@ async def auth_middleware(handler: Callable, event: Any, data: Dict[str, Any]) -
             )
 
         # Group allowlist check (even for existing sessions)
+        # Master user bypasses group allowlist
+        master_user_id = data.get("master_user_id")
+        is_master = master_user_id and user_id == master_user_id
         chat = event.effective_chat
-        if chat and getattr(chat, "type", "") in ("group", "supergroup"):
+        if not is_master and chat and getattr(chat, "type", "") in ("group", "supergroup"):
             storage = data.get("storage")
             if storage:
                 try:
@@ -124,8 +127,11 @@ async def auth_middleware(handler: Callable, event: Any, data: Dict[str, Any]) -
         )
 
         # Group allowlist check
+        # Master user bypasses group allowlist
+        master_user_id = data.get("master_user_id")
+        is_master = master_user_id and user_id == master_user_id
         chat = event.effective_chat
-        if chat and getattr(chat, "type", "") in ("group", "supergroup"):
+        if not is_master and chat and getattr(chat, "type", "") in ("group", "supergroup"):
             storage = data.get("storage")
             if storage:
                 try:
